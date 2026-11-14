@@ -35,7 +35,7 @@ export class SubstitutionRepository {
       if (isConfirmedResultChanged(previous, substitution)) {
         const version = await this.versions.bump('substitutionVersion', transaction)
         const conflict = await this.db.conflicts.get(substitution.conflictId)
-        if (conflict) await this.markDocumentsStale(conflict.date.slice(0, 7), version.substitutionVersion, substitution.updatedAt)
+        if (conflict) await this.markDocumentsStale(conflict.date.slice(0, 7), conflict.studentId, version.substitutionVersion, substitution.updatedAt)
         if (substitution.status === 'confirmed' && memory) await this.remember(memory)
       }
       },
@@ -52,7 +52,7 @@ export class SubstitutionRepository {
       if (previous?.status === 'confirmed') {
         const version = await this.versions.bump('substitutionVersion', transaction)
         const conflict = await this.db.conflicts.get(previous.conflictId)
-        if (conflict) await this.markDocumentsStale(conflict.date.slice(0, 7), version.substitutionVersion, new Date().toISOString())
+        if (conflict) await this.markDocumentsStale(conflict.date.slice(0, 7), conflict.studentId, version.substitutionVersion, new Date().toISOString())
       }
       },
     )
@@ -64,10 +64,11 @@ export class SubstitutionRepository {
     await this.db.substitutionMemories.put({ id, ...memory, count: (previous?.count ?? 0) + 1 })
   }
 
-  private async markDocumentsStale(yearMonth: string, substitutionVersion: number, updatedAt: string): Promise<void> {
+  private async markDocumentsStale(yearMonth: string, studentId: string, substitutionVersion: number, updatedAt: string): Promise<void> {
     const documents = await this.db.generatedDocs.where('status').anyOf('approved', 'sent').toArray()
     const affected = documents.filter((document) =>
-      ((document.yearMonth === yearMonth && ['S3', 'S4'].includes(document.docType))
+      ((document.yearMonth === yearMonth && document.docType === 'S3')
+        || (document.yearMonth === yearMonth && document.docType === 'S4' && document.subjectId === studentId)
         || (document.docType === 'S5' && document.yearMonth === yearMonth.slice(0, 4)))
       && document.basedOn.substitutionVersion !== substitutionVersion,
     )

@@ -113,6 +113,8 @@ describe('대체식 확정 저장', () => {
     expect((await database.generatedDocs.get('doc-11'))?.status).toBe('approved')
     expect((await database.generatedDocs.get('doc-12-s2'))?.status).toBe('approved')
     expect(await database.generatedDocs.get('doc-12-s3')).toMatchObject({ status: 'stale' })
+    expect(await database.generatedDocs.get('doc-12-s4-student')).toMatchObject({ status: 'stale' })
+    expect(await database.generatedDocs.get('doc-12-s4-other')).toMatchObject({ status: 'approved' })
   })
 })
 
@@ -121,6 +123,8 @@ async function seedBase(database: BabmuwonDatabase) {
   const student: Student = { id: 'student', grade: 1, class: 1, number: 1, alias: '구름-01', needsSubstitute: true, memo: '', createdAt: now, updatedAt: now }
   const documents: GeneratedDoc[] = [
     doc('doc-11', 'S3', '2026-11'), doc('doc-12-s2', 'S2', '2026-12'), doc('doc-12-s3', 'S3', '2026-12'),
+    { ...doc('doc-12-s4-student', 'S4', '2026-12'), subjectId: 'student' },
+    { ...doc('doc-12-s4-other', 'S4', '2026-12'), subjectId: 'other-student' },
   ]
   await database.mealPlans.add(plan)
   await database.mealEntries.bulkAdd([

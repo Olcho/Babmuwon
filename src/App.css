@@ -141,6 +141,9 @@ button.secondary { background: white; }
 .print-sheet { padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; background: white; overflow-x: auto; }
 .print-sheet header { margin-bottom: 22px; text-align: center; }.print-sheet header h2 { margin-bottom: 6px; }.print-sheet header p { margin: 3px; color: #64748b; font-size: 12px; }
 .print-sheet table { width: 100%; border-collapse: collapse; }.print-sheet th, .print-sheet td { padding: 8px; border: 1px solid #cbd5e1; font-size: 12px; }.report-text { line-height: 1.7; }
+.pdf-render-host { position: fixed; left: -10000px; top: 0; width: 794px; padding: 56px; background: white; color: #111827; font-family: sans-serif; }
+.pdf-render-host table { width: 100%; border-collapse: collapse; }.pdf-render-host th, .pdf-render-host td { padding: 10px; border: 1px solid #94a3b8; }.pdf-render-host footer { margin-top: 24px; color: #64748b; font-size: 12px; }
+.narrative-missing { margin: 12px 0; padding: 14px; border: 1px solid #fcd34d; background: #fffbeb; color: #92400e; }.document-page-break { break-before: page; page-break-before: always; }
 @media (max-width: 760px) {
   .page-shell { width: min(100% - 24px, 1320px); padding-top: 28px; }
   .page-header, .section-heading, .confirmation-bar { align-items: stretch; flex-direction: column; }

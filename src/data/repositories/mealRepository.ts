@@ -60,6 +60,7 @@ export class MealRepository {
           approvedAt: undefined,
           staleReason: `${plan.yearMonth} 식단이 다시 확정되어 재검토가 필요합니다.`,
           correctionNeeded: doc.status === 'sent',
+          s2DeliveryState: doc.docType === 'S2' ? 'sync_required' as const : doc.s2DeliveryState,
           updatedAt: confirmedAt,
         })))
       },

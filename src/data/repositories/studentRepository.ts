@@ -32,7 +32,7 @@ export class StudentRepository {
       }))
       await this.db.studentAllergies.bulkPut(allergies)
       const version = await this.versions.bump('studentVersion', transaction)
-      await this.markStudentDocumentsStale(version.studentVersion, student.updatedAt)
+      await this.markStudentDocumentsStale(student.id, version.studentVersion, student.updatedAt)
       },
     )
   }
@@ -46,15 +46,16 @@ export class StudentRepository {
       await this.db.studentAllergies.where('studentId').equals(id).delete()
       await this.db.students.delete(id)
       const version = await this.versions.bump('studentVersion', transaction)
-      await this.markStudentDocumentsStale(version.studentVersion, deletedAt)
+      await this.markStudentDocumentsStale(id, version.studentVersion, deletedAt)
       },
     )
   }
 
-  private async markStudentDocumentsStale(studentVersion: number, updatedAt: string): Promise<void> {
+  private async markStudentDocumentsStale(studentId: EntityId, studentVersion: number, updatedAt: string): Promise<void> {
     const documents = await this.db.generatedDocs.where('status').anyOf('approved', 'sent').toArray()
     const affected = documents.filter((document) =>
-      ['S3', 'S4', 'S5'].includes(document.docType) && document.basedOn.studentVersion !== studentVersion,
+      (['S3', 'S5'].includes(document.docType) || (document.docType === 'S4' && (document.subjectId === undefined || document.subjectId === studentId)))
+      && document.basedOn.studentVersion !== studentVersion,
     )
     await this.db.generatedDocs.bulkPut(affected.map((document) => ({
       ...document,

@@ -1,9 +1,9 @@
 import type {
-  AllergenNo, Conflict, DataVersion, MealEntry, Student, StudentAllergy, Substitution,
+  AllergenNo, Conflict, DataVersion, MealEntry, School, Student, StudentAllergy, Substitution,
   YearMonth,
 } from '../../data'
 import { ALLERGEN_ITEMS } from '../students'
-import type { S1Document, S1Row, S3Document, S5Document } from './documentModels'
+import type { S1Document, S1Row, S2Document, S3Document, S4Document, S5Document } from './documentModels'
 
 const weekdays = ['일', '월', '화', '수', '목', '금', '토']
 
@@ -33,6 +33,36 @@ export function buildS1Document(
     basedOn: pickVersions(basedOn), slots, rows,
     weeks: [...weekMap].map(([label, weekRows]) => ({ label, rows: weekRows })),
     legend: ALLERGEN_ITEMS.map(({ no, name }) => ({ no, name })),
+  }
+}
+
+export function buildS2Document(
+  yearMonth: YearMonth,
+  entries: MealEntry[],
+  school: School | undefined,
+  basedOn: DataVersion,
+  generatedAt: string,
+): S2Document {
+  const mealTable = buildS1Document(yearMonth, entries, basedOn, generatedAt)
+  const [year, month] = yearMonth.split('-')
+  const schoolName = school?.name.trim() || '학교 정보 미등록'
+  return {
+    type: 'S2', period: yearMonth, title: `${year}학년도 ${Number(month)}월 급식 안내문`,
+    generatedAt, basedOn: pickVersions(basedOn), issueNo: `${year}-${month}`,
+    school: {
+      name: schoolName, motto: school?.motto?.trim() || '교훈 미등록',
+      address: school?.address?.trim() || '주소 미등록', phone: school?.phone?.trim() || '전화 미등록',
+      homepage: school?.homepage?.trim() || '홈페이지 미등록', manager: school?.manager?.trim() || '담당자 미등록',
+    },
+    greeting: '학교 급식에 보내주시는 관심에 감사드립니다. 아래 식단과 알레르기 유발식품 표시를 확인해 주세요.',
+    mealTable: { slots: mealTable.slots, rows: mealTable.rows, legend: mealTable.legend },
+    allergenNotice: '알레르기 유발식품 번호를 확인해 주세요. 제품과 조리 환경에 따라 원재료 및 교차접촉 가능성이 달라질 수 있습니다.',
+    contact: `${schoolName} 급식 담당 ${school?.manager?.trim() || '미등록'} · ${school?.phone?.trim() || '연락처 미등록'}`,
+    narrativeSlots: [
+      { key: 'monthlyNews', label: '이달의 급식 소식', state: 'not_generated', source: 'router', text: '', citations: [] },
+      { key: 'nutritionEducation', label: '영양 정보', state: 'not_generated', source: 'liner', text: '', citations: [] },
+    ],
+    sendState: 'awaiting_local_s2_state',
   }
 }
 
@@ -74,6 +104,47 @@ export function buildS3Document(
     basedOn: pickVersions(basedOn), rows,
     dailyTotals: [...totals].map(([date, count]) => ({ date, count })),
   }
+}
+
+export function buildS4Documents(
+  yearMonth: YearMonth,
+  conflicts: Conflict[],
+  substitutions: Substitution[],
+  students: Student[],
+  allergies: StudentAllergy[],
+  basedOn: DataVersion,
+  generatedAt: string,
+): { documents: S4Document[]; blockedStudentIds: string[] } {
+  const active = conflicts.filter((item) => item.active !== false && item.date.startsWith(yearMonth))
+  const substitutionByConflict = new Map(substitutions.map((item) => [item.conflictId, item]))
+  const studentById = new Map(students.map((item) => [item.id, item]))
+  const grouped = new Map<string, Conflict[]>()
+  for (const conflict of active) grouped.set(conflict.studentId, [...(grouped.get(conflict.studentId) ?? []), conflict])
+  const documents: S4Document[] = []
+  const blockedStudentIds: string[] = []
+  for (const [studentId, studentConflicts] of grouped) {
+    const student = studentById.get(studentId)
+    if (!student) continue
+    const finalized = studentConflicts.every((conflict) => {
+      const status = substitutionByConflict.get(conflict.id)?.status
+      return conflict.kind !== 'unknown_menu' && (status === 'confirmed' || status === 'excludeOnly')
+    })
+    if (!finalized) { blockedStudentIds.push(studentId); continue }
+    const studentAllergens = allergies.filter((item) => item.studentId === studentId).map((item) => item.allergenNo)
+    const allergenNames = new Map(ALLERGEN_ITEMS.map((item) => [item.no, item.name]))
+    documents.push({
+      type: 'S4', period: yearMonth, title: `${yearMonth} 개별 대체식 안내문`, studentId,
+      recipient: `${student.grade}학년 ${student.class}반 ${student.number}번 학부모님`, studentAlias: student.alias,
+      allergens: studentAllergens.map((no) => ({ no, name: allergenNames.get(no) ?? `${no}번` })),
+      rows: studentConflicts.map((conflict) => {
+        const substitution = substitutionByConflict.get(conflict.id)!
+        return { date: conflict.date, originalMenu: conflict.menuName, substituteMenu: substitution.status === 'excludeOnly' ? '제외만' : substitution.substituteName!, allergenNos: conflict.allergenNos }
+      }).sort((a, b) => a.date.localeCompare(b.date)),
+      confirmationText: '아래 대체식 일정을 확인해 주세요. 제품 원재료와 교차접촉 가능성은 급식 담당자가 확인 후 제공하며, 변경 사항은 학교로 문의해 주세요.',
+      generatedAt, basedOn: pickVersions(basedOn),
+    })
+  }
+  return { documents, blockedStudentIds }
 }
 
 export function buildS5Document(

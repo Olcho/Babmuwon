@@ -12,6 +12,9 @@ export interface School {
   manager: string
   phone: string
   headcount: number
+  motto?: string
+  address?: string
+  homepage?: string
 }
 
 export interface AllergenItem {
@@ -171,6 +174,8 @@ export interface GeneratedDoc {
   updatedAt: ISODateTime
   generatedAt?: ISODateTime
   sourceFingerprint?: string
+  subjectId?: EntityId
+  s2DeliveryState?: 'not_connected' | 'sync_required' | 'synced' | 'sync_failed'
   content?: unknown
 }
 
