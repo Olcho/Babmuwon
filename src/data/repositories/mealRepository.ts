@@ -93,10 +93,44 @@ export class MealRepository {
     await this.db.mealPlans.put(plan)
   }
 
-  async deletePlan(id: EntityId): Promise<void> {
-    await this.db.transaction('rw', this.db.mealPlans, this.db.mealEntries, async () => {
-      await this.db.mealEntries.where('mealPlanId').equals(id).delete()
-      await this.db.mealPlans.delete(id)
-    })
+  /**
+   * 한 달 식단 삭제. 해당 월의 식단·메뉴 행만 지우고 학생·다른 월 데이터는 건드리지 않는다.
+   * - 그 달 충돌은 비활성(active=false), 대체식은 obsolete로 바꿔 이력을 남긴다(R-31 '사라진 건 obsolete').
+   * - 확정 식단이었다면 planVersion+1, 확정 대체식이 사라지면 substitutionVersion+1.
+   * - 그 달 S1~S4와 그 연도 S5의 승인·발송본은 stale(발송본은 correctionNeeded), S2는 Relay 재동기화 대상으로 둔다.
+   */
+  async deletePlan(id: EntityId, at = new Date().toISOString()): Promise<{ yearMonth: YearMonth; obsoleteSubstitutions: number; staleDocuments: number }> {
+    return this.db.transaction(
+      'rw',
+      [this.db.mealPlans, this.db.mealEntries, this.db.conflicts, this.db.substitutions, this.db.dataVersions, this.db.generatedDocs],
+      async (transaction: Transaction) => {
+        const plan = await this.db.mealPlans.get(id)
+        if (!plan) throw new Error('식단을 찾을 수 없습니다.')
+        const month = plan.yearMonth
+
+        await this.db.mealEntries.where('mealPlanId').equals(id).delete()
+        await this.db.mealPlans.delete(id)
+        if (plan.status === 'confirmed') await this.versions.bump('planVersion', transaction)
+
+        const conflicts = await this.db.conflicts.where('date').startsWith(month).filter((conflict) => conflict.active !== false).toArray()
+        await this.db.conflicts.bulkPut(conflicts.map((conflict) => ({ ...conflict, active: false })))
+        const conflictIds = new Set(conflicts.map((conflict) => conflict.id))
+        const substitutions = (await this.db.substitutions.toArray()).filter((item) => conflictIds.has(item.conflictId) && item.status !== 'obsolete')
+        await this.db.substitutions.bulkPut(substitutions.map((item) => ({ ...item, status: 'obsolete' as const, updatedAt: at })))
+        if (substitutions.some((item) => item.status === 'confirmed')) await this.versions.bump('substitutionVersion', transaction)
+
+        const year = month.slice(0, 4)
+        const affected = await this.db.generatedDocs.where('status').anyOf('approved', 'sent')
+          .filter((doc) => (doc.yearMonth === month && doc.docType !== 'S5') || (doc.docType === 'S5' && doc.yearMonth === year)).toArray()
+        await this.db.generatedDocs.bulkPut(affected.map((doc) => ({
+          ...doc, status: 'stale' as const, approvedAt: undefined,
+          staleReason: `${month} 식단이 삭제되어 재검토가 필요합니다.`,
+          correctionNeeded: doc.status === 'sent',
+          s2DeliveryState: doc.docType === 'S2' && doc.s2DeliveryState !== 'not_connected' ? 'sync_required' as const : doc.s2DeliveryState,
+          updatedAt: at,
+        })))
+        return { yearMonth: month, obsoleteSubstitutions: substitutions.length, staleDocuments: affected.length }
+      },
+    )
   }
 }

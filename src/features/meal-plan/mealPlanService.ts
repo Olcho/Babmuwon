@@ -67,6 +67,13 @@ export class MealPlanService {
     return { plan: stored, entries: await this.meals.getEntries(plan.id) }
   }
 
+  /** 해당 월 식단 삭제(충돌·대체식·문서 처리 규칙은 MealRepository.deletePlan). */
+  async deleteMonth(yearMonth: YearMonth) {
+    const plan = await this.meals.getPlanByMonth(yearMonth)
+    if (!plan) throw new Error(`${yearMonth} 식단을 찾을 수 없습니다.`)
+    return this.meals.deletePlan(plan.id)
+  }
+
   async unconfirm(plan: MealPlan): Promise<StoredMealPlan> {
     await this.meals.unconfirm(plan.id)
     const stored = await this.meals.getPlan(plan.id)

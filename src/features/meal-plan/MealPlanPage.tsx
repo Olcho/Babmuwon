@@ -84,6 +84,22 @@ export function MealPlanPage() {
     } finally { setBusy(false) }
   }
 
+  async function deleteMonth() {
+    if (!stored) return
+    const month = stored.plan.yearMonth
+    if (!window.confirm(`${month} 식단을 삭제할까요?\n\n· 이 달의 메뉴 ${stored.entries.length}개가 이 브라우저에서 삭제됩니다.\n· 이 달의 알레르기 충돌과 대체식은 ‘더 이상 해당 없음’으로 바뀌고 이력은 남습니다.\n· 이 달의 승인된 문서와 ${month.slice(0, 4)}년 S5 보고서는 재검토 대상으로 바뀝니다.\n· 다른 달 식단과 학생 정보는 그대로 둡니다.\n\n삭제한 식단은 되돌릴 수 없습니다.`)) return
+    setBusy(true); setMessage('')
+    try {
+      const result = await mealPlanService.deleteMonth(month)
+      const sync = await s2StateSync.syncMonth(month)
+      setIssues([]); setMissingHeaders([]); setEditErrors({})
+      await load()
+      setMessage(`${month} 식단을 삭제했습니다. 대체식 ${result.obsoleteSubstitutions}건은 ‘더 이상 해당 없음’, 문서 ${result.staleDocuments}건은 재검토 대상으로 바뀌었습니다.${syncNotice(sync)}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '식단을 삭제하지 못했습니다.')
+    } finally { setBusy(false) }
+  }
+
   return <div className="page stack">
     <PageHeader title="식단 불러오기·확정" actions={<>
       <Button size="lg" onClick={downloadMealTemplate}>탬플릿 받기</Button>
@@ -136,7 +152,8 @@ export function MealPlanPage() {
         </div>
       </section>)}
 
-      <div className="row row--end">
+      <div className="row row--between">
+        <Button variant="danger" disabled={busy} onClick={() => void deleteMonth()}>{stored.plan.yearMonth} 식단 삭제</Button>
         <Button size="lg" variant={confirmed ? 'secondary' : 'primary'} disabled={busy} onClick={() => void toggleConfirmation()}>{confirmed ? '확정 해제' : '확정'}</Button>
       </div>
     </> : <div className="empty"><strong>저장된 식단이 없습니다</strong>날짜, 슬롯, 메뉴명, 알레르기 번호 열이 있는 .xlsx 파일을 올려 주세요. ‘탬플릿 받기’로 양식을 받을 수 있습니다.</div>}
