@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type {
-  AllergenItem, ApiCache, ApiCallLog, Conflict, DataVersion, GeneratedDoc,
+  AliasHistory, AllergenItem, ApiCache, ApiCallLog, Conflict, DataVersion, GeneratedDoc,
   Guardian, MealEntry, MealPlan, School, SendBatch, SendRecipient, Student,
   StudentAllergy, SubstituteMenu, Substitution, SubstitutionMemory, TextDraft,
 } from './types'
@@ -16,6 +16,7 @@ export class BabmuwonDatabase extends Dexie {
   substituteMenus!: EntityTable<SubstituteMenu, 'id'>
   students!: EntityTable<Student, 'id'>
   studentAllergies!: EntityTable<StudentAllergy, 'id'>
+  aliasHistories!: EntityTable<AliasHistory, 'alias'>
   conflicts!: EntityTable<Conflict, 'id'>
   substitutions!: EntityTable<Substitution, 'id'>
   substitutionMemories!: EntityTable<SubstitutionMemory, 'id'>
@@ -48,6 +49,14 @@ export class BabmuwonDatabase extends Dexie {
       sendRecipients: 'id, batchId, guardianId, requestStatus, deliveryStatus',
       apiCallLogs: 'id, at, endpoint, status',
       apiCache: 'queryHash, createdAt',
+    })
+    this.version(2).stores({
+      aliasHistories: 'alias, createdAt',
+    }).upgrade(async (transaction) => {
+      const students = await transaction.table<Student>('students').toArray()
+      await transaction.table<AliasHistory>('aliasHistories').bulkPut(
+        students.map((student) => ({ alias: student.alias, createdAt: student.createdAt })),
+      )
     })
   }
 }

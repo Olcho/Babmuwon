@@ -83,6 +83,11 @@ export interface StudentAllergy {
   allergenNo: AllergenNo
 }
 
+export interface AliasHistory {
+  alias: string
+  createdAt: ISODateTime
+}
+
 export interface Conflict {
   id: EntityId
   date: ISODate

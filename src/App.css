@@ -1,4 +1,9 @@
 #root { min-height: 100vh; }
+.screen-nav { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px max(20px, calc((100% - 1320px) / 2)); border-bottom: 1px solid #e2e8f0; background: rgba(255,255,255,.96); backdrop-filter: blur(8px); }
+.screen-nav > strong { color: #0f172a; font-size: 18px; }
+.screen-nav div { display: flex; gap: 6px; }
+.screen-nav button { border-color: transparent; background: transparent; }
+.screen-nav button.active { background: #e0e7ff; color: #3730a3; }
 .page-shell { width: min(1320px, calc(100% - 40px)); margin: 0 auto; padding: 48px 0 80px; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .page-header h1 { margin: 4px 0 8px; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.04em; color: #0f172a; }
@@ -48,11 +53,35 @@ button.secondary { background: white; }
 .issues-section h2 span { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 99px; background: #fee2e2; color: #b91c1c; font-size: 13px; }
 .issues-section td:last-child { color: #b91c1c; }
 .empty-state { text-align: center; padding: 70px 20px; }
+.student-form-card, .student-list-card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px; margin-top: 18px; }
+.student-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.student-fields label, .allergen-fieldset legend { color: #475569; font-size: 13px; font-weight: 700; }
+.student-fields input, .student-fields select, .student-search { display: block; width: 100%; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 7px; padding: 9px 10px; background: white; color: #0f172a; }
+.student-fields small, .allergen-fieldset legend span { color: #94a3b8; font-weight: 500; }
+.allergen-fieldset { margin: 22px 0; padding: 0; border: 0; }
+.allergen-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.allergen-options label { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 9px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; cursor: pointer; font-size: 13px; }
+.allergen-options label.selected { border-color: #818cf8; background: #eef2ff; color: #3730a3; }
+.allergen-options label small { display: block; color: #64748b; font-size: 10px; }
+.lower-fields { grid-template-columns: minmax(160px, .4fr) 1.6fr; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.student-search { width: min(360px, 100%); margin: 0; }
+.count-badge { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 99px; background: #e0e7ff; color: #3730a3; font-size: 13px; }
+.student-table td { vertical-align: middle; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 250px; }
+.row-actions button { padding: 6px 8px; font-size: 12px; }
+.row-actions .danger { color: #b91c1c; }
+.empty-list { padding: 50px 20px; text-align: center; color: #64748b; }
 @media (max-width: 760px) {
   .page-shell { width: min(100% - 24px, 1320px); padding-top: 28px; }
   .page-header, .section-heading, .confirmation-bar { align-items: stretch; flex-direction: column; }
   .upload-button { text-align: center; }
   .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .screen-nav { align-items: stretch; flex-direction: column; }
+  .screen-nav div { overflow-x: auto; }
+  .screen-nav button { white-space: nowrap; }
+  .student-fields, .lower-fields { grid-template-columns: 1fr 1fr; }
+  .allergen-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary div:nth-child(2) { border-right: 0; }
   .summary div:nth-child(-n+2) { border-bottom: 1px solid #e2e8f0; }
 }

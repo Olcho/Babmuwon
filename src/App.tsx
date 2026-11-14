@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import type { MealEntry, MealPlan } from './data'
 import { mealPlanService, parseAllergenValue, parseMealWorkbook, type MealPlanParseIssue, type StoredMealPlan } from './features/meal-plan'
+import { StudentAllergyPage } from './features/students/StudentAllergyPage'
 import './App.css'
 
 function allergenLabel(entry: MealEntry): string {
@@ -9,7 +10,7 @@ function allergenLabel(entry: MealEntry): string {
   return entry.allergenNos.join('.')
 }
 
-function App() {
+function MealPlanPage() {
   const [stored, setStored] = useState<StoredMealPlan>()
   const [issues, setIssues] = useState<MealPlanParseIssue[]>([])
   const [missingHeaders, setMissingHeaders] = useState<string[]>([])
@@ -158,6 +159,19 @@ function App() {
         </section>
       )}
     </main>
+  )
+}
+
+function App() {
+  const [screen, setScreen] = useState<'students' | 'meals'>('students')
+  return (
+    <>
+      <nav className="screen-nav" aria-label="업무 화면">
+        <strong>밥무원</strong>
+        <div><button type="button" className={screen === 'students' ? 'active' : ''} onClick={() => setScreen('students')}>학생 알레르기 등록</button><button type="button" className={screen === 'meals' ? 'active' : ''} onClick={() => setScreen('meals')}>식단 불러오기·확정</button></div>
+      </nav>
+      {screen === 'students' ? <StudentAllergyPage /> : <MealPlanPage />}
+    </>
   )
 }
 
