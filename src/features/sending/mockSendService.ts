@@ -197,6 +197,22 @@ export class MockSendService {
     await this.database.sendRecipients.put({ ...recipient, deliveryStatus: status, deliveryCheckedBy: 'manual', updatedAt: new Date().toISOString() })
   }
 
+  /**
+   * F5-7 수동 발송 파일(txt: 문구·월, csv: memberId·전화번호). Mock 시연에서는 파일만 만들고 배치 상태는 바꾸지 않는다.
+   * 파일에는 실제 연락처가 들어가므로 이 기기 안에서만 다룬다.
+   */
+  async manualExportFiles(batchId: string): Promise<{ txt: { filename: string; content: string }; csv: { filename: string; content: string } }> {
+    const batch = await this.database.sendBatches.get(batchId)
+    if (!batch?.simulated) throw new MockSendError('Mock 발송 기록을 찾을 수 없습니다.')
+    const month = batch.batchKey.slice(0, 7)
+    const recipients = await this.database.sendRecipients.where('batchId').equals(batchId).toArray()
+    const guardians = (await this.database.guardians.bulkGet(recipients.map((item) => item.guardianId))).filter((item): item is Guardian => Boolean(item))
+    return {
+      txt: { filename: `${month}_alimtalk.txt`, content: `templateCode=${batch.templateCode}\nmonth=${Number(month.slice(5))}\n${mockAlimtalkText(month, (await this.database.schools.get('school'))?.name)}\n` },
+      csv: { filename: `${month}_recipients.csv`, content: `memberId,phone\r\n${guardians.map((item) => `${item.channelMemberId},${item.phone}`).join('\r\n')}\r\n` },
+    }
+  }
+
   /** 발송 이력(최신순). 진행 중이 아닌데 대기로 남은 수신자(새로고침 등으로 중단)는 가상 실패로 정리한다. */
   async listHistory(): Promise<MockBatchView[]> {
     const batches = (await this.database.sendBatches.toArray()).filter((batch) => batch.simulated)

@@ -66,6 +66,9 @@ export interface RelayS5BodyRequest {
   }
 }
 
+/** `GET /audit`: Relay가 남긴 최근 100건(시각·엔드포인트·상태 코드만, 본문 없음). */
+export interface RelayAuditEvent { at: string; endpoint: string; status: string; statusCode: number; durationMs: number; diagnostic?: string }
+
 export type RelayErrorKind =
   | 'configuration' // 토큰·주소 미설정 또는 요청 전 로컬 검증 실패
   | 'authentication' // 401
@@ -123,6 +126,16 @@ export class RelayClient {
     const value = await this.request('/health', false)
     if (!isHealth(value)) throw new RelayApiError('invalid_response', 'Relay health 응답 형식이 올바르지 않습니다.')
     return value
+  }
+
+  async audit(): Promise<RelayAuditEvent[]> {
+    if (!this.token) throw new RelayApiError('configuration', 'Relay 토큰을 입력해 주세요.')
+    const value = await this.request('/audit', true)
+    const events = value && typeof value === 'object' ? (value as { events?: unknown }).events : undefined
+    if (!Array.isArray(events) || !events.every((item) => item && typeof item === 'object' && typeof item.at === 'string' && typeof item.endpoint === 'string' && typeof item.statusCode === 'number')) {
+      throw new RelayApiError('invalid_response', 'Relay audit 응답 형식이 올바르지 않습니다.')
+    }
+    return events as RelayAuditEvent[]
   }
 
   async catalog(): Promise<RelayCatalog> {

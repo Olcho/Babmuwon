@@ -1,25 +1,62 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GeneratedDoc, YearMonth } from '../../data'
-import { S2NarrativeEditor, S5NarrativeEditor } from './NarrativeEditor'
+import { navigate } from '../../app/navigation'
+import { Badge, Button, Field, Notice, PageHeader, SectionTitle } from '../../ui'
+import { mealPlanService } from '../meal-plan/mealPlanService'
 import { s2StateSync, type S2SendEligibility } from '../relay/s2StateSync'
-import { documentService, downloadDocumentXlsx, reportBodyText, downloadS4Pdf, downloadS4Zip, type LocalDocumentArtifact, type S2Document, type S4Document, type SupportedDocumentType } from '.'
+import { DocumentPreview } from './DocumentPreview'
+import { downloadDocumentXlsx } from './documentExporters'
+import type { LocalDocumentArtifact, S2Document, S4Document, S5Document, SupportedDocumentType } from './documentModels'
+import { downloadS4Pdf, downloadS4Zip } from './documentPdf'
+import { documentService } from './documentService'
+import { S2NarrativeEditor, S5NarrativeEditor } from './NarrativeEditor'
 
-const initialDate = new Date()
+export { DocumentPreview } from './DocumentPreview'
 
+const DOC_TABS: { type: SupportedDocumentType; title: string; formats: string }[] = [
+  { type: 'S1', title: '월간·주간 식단표', formats: 'xlsx, PDF' },
+  { type: 'S2', title: '월간 급식 가정통신문', formats: 'PDF' },
+  { type: 'S3', title: '대체식 작업표(조리실)', formats: 'xlsx, PDF' },
+  { type: 'S4', title: '대체식 개별 안내문', formats: 'PDF (zip)' },
+  { type: 'S5', title: '식품알레르기 운영현황 보고', formats: 'xlsx, PDF' },
+]
+
+const now = new Date()
+
+/** SC-06 문서 만들기 (Figma Frame 87). 생성·승인·stale·내보내기는 기존 documentService·exporter를 쓴다. */
 export function DocumentPage() {
-  const [month, setMonth] = useState(`${initialDate.getFullYear()}-${String(initialDate.getMonth() + 1).padStart(2, '0')}` as YearMonth)
-  const [year, setYear] = useState(`${initialDate.getFullYear()}` as `${number}`)
+  const [type, setType] = useState<SupportedDocumentType>('S2')
+  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` as YearMonth)
+  const [year, setYear] = useState(`${now.getFullYear()}` as `${number}`)
   const [docs, setDocs] = useState<GeneratedDoc[]>([])
-  const [selected, setSelected] = useState<GeneratedDoc>()
-  const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [selectedId, setSelectedId] = useState<string>()
   const [eligibility, setEligibility] = useState<S2SendEligibility & { docId: string }>()
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
 
   async function refresh(selectId?: string) {
     const list = await documentService.list()
     setDocs(list)
-    setSelected(list.find((item) => item.id === selectId) ?? list[0])
+    if (selectId) setSelectedId(selectId)
   }
+  // 저장된 식단의 최신 월을 기본 대상 월로 쓴다. IndexedDB는 외부 저장소이므로 화면을 열 때 한 번 불러온다.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    void refresh()
+    void mealPlanService.listPlans().then((plans) => {
+      const latest = plans[0]?.yearMonth
+      if (latest) { setMonth(latest); setYear(latest.slice(0, 4) as `${number}`) }
+    })
+  }, [])
+
+  const period = type === 'S5' ? year : month
+  const versions = useMemo(() => docs.filter((doc) => doc.docType === type && doc.yearMonth === period).sort((a, b) => b.docVersion - a.docVersion || b.createdAt.localeCompare(a.createdAt)), [docs, type, period])
+  const selected = versions.find((doc) => doc.id === selectedId) ?? versions[0]
+  const artifact = selected?.content as LocalDocumentArtifact | undefined
+  const unapproved = countUnapproved(artifact)
+
   useEffect(() => {
     let active = true
     if (selected?.docType !== 'S2') return
@@ -27,125 +64,143 @@ export function DocumentPage() {
     void s2StateSync.checkSendEligibility(docId).then((value) => { if (active) setEligibility({ ...value, docId }) })
     return () => { active = false }
   }, [selected])
-  // IndexedDB is an external persistent store; load it once when this screen mounts.
-  // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => { void refresh() }, [])
 
-  async function generate(type: SupportedDocumentType) {
-    setBusy(true); setMessage('')
-    try {
+  async function run(action: () => Promise<string>) {
+    setBusy(true); setMessage(''); setError('')
+    try { setMessage(await action()) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '처리하지 못했습니다.') }
+    finally { setBusy(false) }
+  }
+
+  function generate() {
+    void run(async () => {
       if (type === 'S4') {
         const result = await documentService.generateS4(month)
         await refresh(result.documents[0]?.id)
-        setMessage(`S4 ${result.documents.length}건을 생성했습니다.${result.blockedStudentIds.length ? ` 미확정 대체식으로 제외된 학생 ${result.blockedStudentIds.length}명.` : ''}`)
-        return
+        return `S4 ${result.documents.length}건을 생성했습니다.${result.blockedStudentIds.length ? ` 미확정 대체식으로 제외된 학생 ${result.blockedStudentIds.length}명.` : ''}`
       }
-      const doc = type === 'S1' ? await documentService.generateS1(month)
-        : type === 'S2' ? await documentService.generateS2(month)
-          : type === 'S3' ? await documentService.generateS3(month)
-            : await documentService.generateS5(year)
+      const doc = type === 'S1' ? await documentService.generateS1(month) : type === 'S2' ? await documentService.generateS2(month)
+        : type === 'S3' ? await documentService.generateS3(month) : await documentService.generateS5(year)
       await refresh(doc.id)
-      setMessage(`${type} 문서 v${doc.docVersion}을 로컬에서 생성했습니다.`)
-    } catch (error) { setMessage(error instanceof Error ? error.message : '문서를 생성하지 못했습니다.') }
-    finally { setBusy(false) }
+      return `${type} 문서 v${doc.docVersion}을 이 브라우저에서 생성했습니다.`
+    })
   }
 
-  async function approve() {
+  function approve() {
     if (!selected) return
-    try {
-      const doc = await documentService.approve(selected.id)
-      const sync = doc.docType === 'S2' ? await s2StateSync.syncMonth(doc.yearMonth) : undefined
-      await refresh(doc.id)
-      setMessage(`최신 기준 데이터와 일치하는 승인본으로 표시했습니다.${sync ? ` ${sync.message}` : ''}`)
-    }
-    catch (error) { setMessage(error instanceof Error ? error.message : '승인하지 못했습니다.'); await refresh(selected.id) }
+    void run(async () => {
+      try {
+        const doc = await documentService.approve(selected.id)
+        const sync = doc.docType === 'S2' ? await s2StateSync.syncMonth(doc.yearMonth) : undefined
+        await refresh(doc.id)
+        return `최신 기준 데이터와 일치하는 승인본으로 표시했습니다.${sync ? ` ${sync.message}` : ''}`
+      } finally { await refresh(selected.id) }
+    })
   }
 
-  async function resyncS2() {
-    if (selected?.docType !== 'S2') return
-    setBusy(true)
-    try { const sync = await s2StateSync.syncMonth(selected.yearMonth, { force: true }); await refresh(selected.id); setMessage(sync.message) }
-    finally { setBusy(false) }
+  function exportDocument() {
+    if (!selected || !artifact) return
+    if (selected.status !== 'approved' && !window.confirm(`이 문서는 아직 승인되지 않았습니다(${statusLabel(selected.status)}).${unapproved ? ` 미승인 문장 ${unapproved}개가 있습니다.` : ''}\n그래도 내보낼까요?`)) return
+    void run(async () => {
+      if (artifact.type === 'S2') { window.print(); return 'PDF 저장·인쇄 창을 열었습니다.' }
+      if (artifact.type === 'S4') {
+        const latest = new Map<string, GeneratedDoc>()
+        for (const doc of docs.filter((item) => item.docType === 'S4' && item.yearMonth === month && item.status !== 'stale' && item.content)) {
+          const key = doc.subjectId ?? doc.id
+          if (!latest.has(key) || latest.get(key)!.docVersion < doc.docVersion) latest.set(key, doc)
+        }
+        await downloadS4Zip([...latest.values()].map((doc) => doc.content as S4Document))
+        return `학생별 안내문 ${latest.size}건을 ZIP으로 저장했습니다.`
+      }
+      downloadDocumentXlsx(artifact, selected.docVersion)
+      return 'XLSX 파일을 저장했습니다.'
+    })
   }
 
-  function download() {
-    if (!selected?.content) return
-    downloadDocumentXlsx(selected.content as LocalDocumentArtifact, selected.docVersion)
-  }
+  const tab = DOC_TABS.find((item) => item.type === type)!
 
-  async function downloadIndividualPdf() {
-    if (selected?.docType !== 'S4' || !selected.content) return
-    setBusy(true)
-    try { await downloadS4Pdf(selected.content as S4Document) }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'PDF를 생성하지 못했습니다.') }
-    finally { setBusy(false) }
-  }
+  return <div className="page">
+    <PageHeader title="문서 만들기" actions={<Button size="lg" variant="primary" disabled={!artifact || busy} onClick={exportDocument}>내보내기</Button>} />
+    <div className="docs-layout">
+      <div className="stack" style={{ gap: 40 }}>
+        <section>
+          <SectionTitle>문서 선택</SectionTitle>
+          <div className="doc-tabs" role="tablist">
+            {DOC_TABS.map((item) => <button key={item.type} type="button" role="tab" aria-selected={item.type === type} className={`doc-tab${item.type === type ? ' is-active' : ''}`} onClick={() => { setType(item.type); setSelectedId(undefined); setMessage(''); setError('') }}>
+              <strong>{item.title}</strong><span>{item.type} · {item.formats}</span>
+            </button>)}
+          </div>
+        </section>
 
-  async function downloadZip() {
-    const latest = new Map<string, GeneratedDoc>()
-    for (const doc of docs.filter((item) => item.docType === 'S4' && item.yearMonth === month && item.status !== 'stale' && item.content)) {
-      const key = doc.subjectId ?? doc.id
-      if (!latest.has(key) || latest.get(key)!.docVersion < doc.docVersion) latest.set(key, doc)
-    }
-    const artifacts = [...latest.values()].map((doc) => doc.content as S4Document)
-    setBusy(true)
-    try { await downloadS4Zip(artifacts) }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'ZIP을 생성하지 못했습니다.') }
-    finally { setBusy(false) }
-  }
+        <div className="doc-period">
+          {type === 'S5' ? <Field label="대상 연도"><input type="number" min="2000" max="2100" value={year} onChange={(event) => { setYear(event.target.value as `${number}`); setSelectedId(undefined) }} /></Field>
+            : <Field label="대상 월"><input type="month" value={month} onChange={(event) => { setMonth(event.target.value as YearMonth); setSelectedId(undefined) }} /></Field>}
+          <Button variant={selected ? 'secondary' : 'primary'} disabled={busy} onClick={generate}>{selected ? `${tab.title} 다시 생성` : `${tab.title} 생성`}</Button>
+          {type === 'S4' && selected && <Button disabled={busy} onClick={() => void run(async () => { await downloadS4Pdf(selected.content as S4Document); return '학생별 PDF를 저장했습니다.' })}>이 학생 PDF</Button>}
+          {type !== 'S2' && type !== 'S4' && <Button disabled={busy || !selected} onClick={() => window.print()}>PDF 저장·인쇄</Button>}
+        </div>
 
-  return <main className="page-shell document-page">
-    <header className="page-header"><div><p className="eyebrow">SC-06 · S1~S5</p><h1>문서 자동 생성</h1><p>모든 생성과 다운로드는 이 브라우저 안에서 처리됩니다.</p></div></header>
-    {message && <p className="notice" role="status">{message}</p>}
-    <section className="document-controls no-print">
-      <label>대상 월<input type="month" value={month} onChange={(event) => setMonth(event.target.value as YearMonth)} /></label>
-      <button disabled={busy} onClick={() => void generate('S1')}>월간·주간 식단표 생성</button>
-      <button disabled={busy} onClick={() => void generate('S2')}>가정통신문 생성</button>
-      <button disabled={busy} onClick={() => void generate('S3')}>내부 작업표 생성</button>
-      <button disabled={busy} onClick={() => void generate('S4')}>개별 안내문 생성</button>
-      <button disabled={busy} onClick={() => void downloadZip()}>S4 PDF ZIP 다운로드</button>
-      <label>대상 연도<input type="number" min="2000" max="2100" value={year} onChange={(event) => setYear(event.target.value as `${number}`)} /></label>
-      <button disabled={busy} onClick={() => void generate('S5')}>연간 운영 보고서 생성</button>
-    </section>
-    <section className="document-workspace">
-      <aside className="document-list no-print"><h2>생성 문서</h2>{docs.length === 0 ? <p>아직 생성된 문서가 없습니다.</p> : docs.map((doc) => <button key={doc.id} className={selected?.id === doc.id ? 'active' : ''} onClick={() => setSelected(doc)}><strong>{doc.docType} · {doc.yearMonth}</strong><span>v{doc.docVersion} · {statusLabel(doc.status)}</span></button>)}</aside>
-      <section className="document-preview">
-        {!selected?.content ? <div className="empty-state"><h2>문서를 선택해 주세요</h2></div> : <>
-          <div className="document-actions no-print"><span className={`doc-status ${selected.status}`}>{statusLabel(selected.status)}</span>{!['S2', 'S4'].includes(selected.docType) && <button onClick={download}>XLSX 다운로드</button>}{selected.docType === 'S4' && <button disabled={busy} onClick={() => void downloadIndividualPdf()}>학생별 PDF</button>}<button onClick={() => window.print()}>PDF 저장·인쇄</button><button className="primary" disabled={selected.status !== 'draft'} onClick={() => void approve()}>승인</button>{selected.docType === 'S2' && <button disabled={busy || selected.status === 'draft'} onClick={() => void resyncS2()}>Relay 재동기화</button>}</div>
-          {selected.docType === 'S2' && eligibility?.docId === selected.id && <p className={eligibility?.eligible ? 'notice' : 'warning'} role="status">Relay 동기화: {deliveryLabel(selected.s2DeliveryState)} · {eligibility?.eligible ? '발송 가능 상태' : `발송 불가${eligibility?.reason ? ` — ${eligibility.reason}` : ''}`}</p>}
-          {selected.status === 'stale' && <p className="warning">재검토 필요: {selected.staleReason}</p>}
-          {selected.docType === 'S2' && <S2NarrativeEditor doc={selected} onChanged={() => refresh(selected.id)} />}
-          {selected.docType === 'S5' && <S5NarrativeEditor doc={selected} onChanged={() => refresh(selected.id)} />}
-          <DocumentPreview artifact={selected.content as LocalDocumentArtifact} version={selected.docVersion} />
+        {message && <Notice tone="success">{message}</Notice>}
+        {error && <Notice tone="danger">{error}</Notice>}
+        {selected?.status === 'stale' && <Notice tone="danger">재검토 필요: {selected.staleReason} 최신 데이터로 다시 생성해 주세요.</Notice>}
+
+        {!artifact ? <div className="empty"><strong>{selected ? '이전 형식 문서에는 미리보기가 없습니다' : `${period} ${tab.title}이(가) 아직 없습니다`}</strong>
+          {type === 'S1' || type === 'S2' ? '확정된 월간 식단이 있어야 생성할 수 있습니다.' : '확정 식단과 대체식 확정(확인 필요·재검토 0건)이 있어야 생성할 수 있습니다.'}</div>
+          : <>
+            {type === 'S4' && versions.length > 0 && <Field label="학생별 안내문"><select className="ds-input" value={selected?.id} onChange={(event) => setSelectedId(event.target.value)}>
+              {latestPerSubject(versions).map((doc) => <option key={doc.id} value={doc.id}>{(doc.content as S4Document).recipient} · v{doc.docVersion} · {statusLabel(doc.status)}</option>)}
+            </select></Field>}
+            <DocumentPreview artifact={artifact} version={selected!.docVersion} />
+            <div ref={editorRef}>
+              {selected!.docType === 'S2' && <S2NarrativeEditor doc={selected!} onChanged={() => refresh(selected!.id)} />}
+              {selected!.docType === 'S5' && <S5NarrativeEditor doc={selected!} onChanged={() => refresh(selected!.id)} />}
+            </div>
+          </>}
+      </div>
+
+      <aside className="approval-panel" aria-label="승인">
+        <h2>마지막 확인을 부탁드려요.</h2>
+        {!selected ? <p className="muted">문서를 생성하면 여기에서 승인할 수 있습니다.</p> : <>
+          <p className={`approval-panel__headline${selected.status === 'stale' || unapproved ? ' is-danger' : ''}`}>
+            {selected.status === 'approved' ? '승인 완료' : selected.status === 'stale' ? '재검토 필요 — 다시 생성해 주세요' : unapproved ? `미승인 문장 ${unapproved}개` : '승인 대기'}
+          </p>
+          <p className="muted" style={{ fontSize: 14 }}>승인해야 내보내기와 학부모 발송을 할 수 있어요.</p>
+          <dl>
+            <dt>문서</dt><dd>{selected.docType} v{selected.docVersion} · <span className={`status-pill status-pill--${selected.status}`}>{statusLabel(selected.status)}</span></dd>
+            <dt>기준 버전</dt><dd>식단 {selected.basedOn.planVersion} / 학생 {selected.basedOn.studentVersion} / 대체식 {selected.basedOn.substitutionVersion}</dd>
+            <dt>생성</dt><dd>{new Date(selected.generatedAt ?? selected.createdAt).toLocaleString('ko-KR')}</dd>
+            {selected.docType === 'S2' && <><dt>Relay</dt><dd>{deliveryLabel(selected.s2DeliveryState)}</dd></>}
+          </dl>
+          {selected.docType === 'S2' && eligibility?.docId === selected.id && <Notice tone={eligibility.eligible ? 'success' : 'warning'}>{eligibility.eligible ? '실제 발송 조건 충족(Relay 동기화 완료)' : `실제 발송 불가 — ${eligibility.reason}`}</Notice>}
+          <div className="approval-panel__actions">
+            <Button variant="primary" disabled={busy || selected.status !== 'draft'} onClick={approve}>{selected.status === 'approved' ? '승인됨' : '승인'}</Button>
+            <Button disabled={busy} onClick={generate}>다시 생성</Button>
+            <Button disabled={busy || !['S2', 'S5'].includes(selected.docType) || selected.status !== 'draft'} onClick={() => editorRef.current?.scrollIntoView({ behavior: 'smooth' })}>직접 수정</Button>
+          </div>
+          {selected.docType === 'S2' && selected.status !== 'draft' && <Button disabled={busy} onClick={() => void run(async () => { const sync = await s2StateSync.syncMonth(selected.yearMonth, { force: true }); await refresh(selected.id); return sync.message })}>Relay 재동기화</Button>}
+          {selected.docType === 'S2' && selected.status === 'approved' && <Button onClick={() => navigate('sending')}>학부모 발송으로 이동</Button>}
+          {versions.length > 1 && type !== 'S4' && <div className="version-list"><span className="muted" style={{ fontSize: 13 }}>버전 기록</span>
+            {versions.map((doc) => <button key={doc.id} type="button" className={doc.id === selected.id ? 'is-active' : ''} onClick={() => setSelectedId(doc.id)}><span>v{doc.docVersion} · {new Date(doc.createdAt).toLocaleString('ko-KR')}</span><span className={`status-pill status-pill--${doc.status}`}>{statusLabel(doc.status)}</span></button>)}
+          </div>}
+          {selected.docType === 'S2' && <Badge tone="neutral">발송 전 클릭 순간에 다시 검증합니다</Badge>}
         </>}
-      </section>
-    </section>
-  </main>
+      </aside>
+    </div>
+  </div>
 }
 
-export function DocumentPreview({ artifact, version }: { artifact: LocalDocumentArtifact; version: number }) {
-  return <article className="print-sheet">
-    <header><h2>{artifact.title}</h2><p>문서 v{version} · 생성 {new Date(artifact.generatedAt).toLocaleString('ko-KR')}</p><p>기준 버전: 식단 {artifact.basedOn.planVersion} / 학생 {artifact.basedOn.studentVersion} / 대체식 {artifact.basedOn.substitutionVersion}</p></header>
-    {artifact.type === 'S1' ? <MealTable rows={artifact.rows} slots={artifact.slots} />
-      : artifact.type === 'S2' ? <S2Preview artifact={artifact} />
-        : artifact.type === 'S3' ? <table><thead><tr><th>날짜</th><th>학생</th><th>기존 메뉴</th><th>대체식</th><th>충돌 번호</th><th>확인 사항</th></tr></thead><tbody>{artifact.rows.map((row, index) => <tr key={`${row.date}-${index}`}><td>{row.date}</td><td>{row.studentDisplay}</td><td>{row.originalMenu}</td><td>{row.substituteMenu}</td><td>{row.allergenNos.join('.')}</td><td>{row.caution}</td></tr>)}</tbody></table>
-          : artifact.type === 'S4' ? <S4Preview artifact={artifact} />
-            : <><p className="report-text">{reportBodyText(artifact)}</p>{artifact.narrativeSlots?.map((slot) => slot.state !== 'not_generated' && <p className="narrative-meta" key={slot.key}>{slot.state === 'approved' ? '승인된 본문' : '검토 중인 초안(승인 전 — 아직 반영되지 않음)'}{slot.simulated ? ' · 모의 결과' : ''}{slot.sourceMissing ? ' · 출처 없음' : ''}</p>)}<div className="summary"><div><span>관리 학생</span><strong>{artifact.totalStudents}명</strong></div><div><span>대체식 제공</span><strong>{artifact.providedCount}건</strong></div><div><span>제외 처리</span><strong>{artifact.excludedCount}건</strong></div></div><h3>알레르기 유발식품별 현황</h3><table><thead><tr><th>번호</th><th>항목</th><th>학생 수</th></tr></thead><tbody>{artifact.byAllergen.map((item) => <tr key={item.allergenNo}><td>{item.allergenNo}</td><td>{item.name}</td><td>{item.students}</td></tr>)}</tbody></table></>}
-  </article>
+function countUnapproved(artifact?: LocalDocumentArtifact): number {
+  if (!artifact) return 0
+  if (artifact.type === 'S2') return (artifact as S2Document).narrativeSlots.filter((slot) => slot.state !== 'approved').length
+  if (artifact.type === 'S5') return ((artifact as S5Document).narrativeSlots ?? []).filter((slot) => slot.state === 'draft').length
+  return 0
 }
 
-function MealTable({ rows, slots }: { rows: S2Document['mealTable']['rows']; slots: string[] }) {
-  return <table><thead><tr><th>날짜</th><th>요일</th>{slots.map((slot) => <th key={slot}>{slot}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row.date}><td>{row.date}</td><td>{row.weekday}</td>{row.menus.map((menu) => <td key={menu.slot}>{menu.label || '—'}</td>)}</tr>)}</tbody></table>
-}
-
-function S2Preview({ artifact }: { artifact: S2Document }) {
-  return <><section><p>{artifact.school.motto}</p><p>{artifact.school.name} · {artifact.school.address} · {artifact.school.phone} · {artifact.school.homepage}</p><p>{artifact.greeting}</p><MealTable rows={artifact.mealTable.rows} slots={artifact.mealTable.slots} /><p>{artifact.allergenNotice}</p><ol>{artifact.mealTable.legend.map((item) => <li key={item.no}>{item.no}. {item.name}</li>)}</ol><p>{artifact.contact}</p></section><section className="document-page-break"><h2>이달의 소식</h2>{artifact.narrativeSlots.map((slot) => <div className="narrative-missing" key={slot.key}><h3>{slot.label}</h3><p>{slot.state === 'not_generated' ? '문구 미작성 — 아래 편집 영역에서 AI 생성·기본 문구·직접 입력 중 하나로 작성한 뒤 승인해 주세요.' : slot.text}</p>{slot.state !== 'not_generated' && <p className="narrative-meta">{slot.state === 'approved' ? '승인된 문구' : '검토 중인 초안(승인 전)'}{slot.simulated ? ' · 모의 결과' : ''}{slot.sourceMissing ? ' · 출처 없음' : ''}</p>}{slot.citations.length > 0 && <ul>{slot.citations.map((citation) => <li key={citation.url}>{citation.title || citation.url}</li>)}</ul>}</div>)}</section></>
-}
-
-function S4Preview({ artifact }: { artifact: S4Document }) {
-  return <><p><strong>{artifact.recipient}</strong></p><p>대상 알레르기: {artifact.allergens.map((item) => `${item.no}. ${item.name}`).join(', ')}</p><p>{artifact.confirmationText}</p><table><thead><tr><th>날짜</th><th>기존 메뉴</th><th>확정 대체 메뉴</th><th>충돌 번호</th></tr></thead><tbody>{artifact.rows.map((row, index) => <tr key={`${row.date}-${index}`}><td>{row.date}</td><td>{row.originalMenu}</td><td>{row.substituteMenu}</td><td>{row.allergenNos.join('.')}</td></tr>)}</tbody></table></>
+function latestPerSubject(docs: GeneratedDoc[]): GeneratedDoc[] {
+  const latest = new Map<string, GeneratedDoc>()
+  for (const doc of docs) { const key = doc.subjectId ?? doc.id; if (!latest.has(key) || latest.get(key)!.docVersion < doc.docVersion) latest.set(key, doc) }
+  return [...latest.values()]
 }
 
 function deliveryLabel(state: GeneratedDoc['s2DeliveryState']) { return { not_connected: '미연결', sync_required: '동기화 필요', synced: '동기화됨', sync_failed: '동기화 실패' }[state ?? 'not_connected'] }
-
 function statusLabel(status: GeneratedDoc['status']) { return { draft: '초안', approved: '승인본', stale: '재검토 필요', sent: '발송됨' }[status] }

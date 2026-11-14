@@ -4,6 +4,8 @@ import { BabmuwonDatabase, MealRepository, VersionRepository, type GeneratedDoc,
 import { DocumentService } from '../documents/documentService'
 import type { S2Document } from '../documents/documentModels'
 import { S2StateSyncService } from '../relay/s2StateSync'
+import * as XLSX from 'xlsx'
+import { importGuardiansFromWorkbook } from './guardianImport'
 import { MOCK_INTERRUPTED_CODE, MockSendError, MockSendService, batchKeyOf, maskPhone, mockAlimtalkText, normalizePhone } from './mockSendService'
 
 const at = '2026-11-15T00:00:00.000Z'
@@ -199,6 +201,25 @@ describe('Mock 학부모 발송 시뮬레이션', () => {
     expect(await database.guardians.count()).toBe(4)
     expect(maskPhone('010-1234-5678')).toBe('010-****-5678')
     expect(mockAlimtalkText('2026-12', '가상학교')).toBe('[가상학교] 12월 급식 안내입니다. 이달 식단과 알레르기 표시는 아래 버튼에서 확인해 주세요.')
+  })
+
+  it('엑셀로 가상 보호자를 불러오고 형식 오류·중복 행은 건너뛴다', async () => {
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['이름표', '번호'], ['1학년 2반 학부모', '010-0000-0101'], ['잘못된 번호', '02-123-4567'], ['중복', '010-0000-0001']]), 'Sheet1')
+    const result = await importGuardiansFromWorkbook(service, XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+    expect(result.added).toBe(1)
+    expect(result.errors).toHaveLength(2)
+    expect(await database.guardians.where('phone').equals('010-0000-0101').count()).toBe(1)
+  })
+
+  it('수동 발송 파일(txt·csv)을 만들고 배치 상태는 바꾸지 않는다', async () => {
+    const doc = await approvedS2('2026-12')
+    const view = await service.simulate(doc.id, guardianIds.slice(0, 2))
+    const files = await service.manualExportFiles(view.batch.id)
+    expect(files.txt.filename).toBe('2026-12_alimtalk.txt')
+    expect(files.txt.content).toContain('month=12')
+    expect(files.csv.content.split('\r\n').filter(Boolean)).toHaveLength(3)
+    expect((await database.sendBatches.get(view.batch.id))?.status).toBe('requested')
   })
 
   async function approvedS2(month: YearMonth): Promise<GeneratedDoc> {

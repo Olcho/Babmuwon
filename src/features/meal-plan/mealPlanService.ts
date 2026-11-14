@@ -10,6 +10,11 @@ export interface StoredMealPlan {
 export class MealPlanService {
   private readonly meals = new MealRepository(db)
 
+  /** 저장된 모든 월의 식단(최신 월 먼저). */
+  async listPlans(): Promise<MealPlan[]> {
+    return (await this.meals.getAllPlans()).sort((a, b) => b.yearMonth.localeCompare(a.yearMonth))
+  }
+
   async getLatest(): Promise<StoredMealPlan | undefined> {
     const plans = await this.meals.getAllPlans()
     const plan = plans.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]

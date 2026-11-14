@@ -228,6 +228,19 @@ describe('RelayClient POST /ai/substitute-evidence, /ai/s5-body', () => {
     })
 })
 
+describe('RelayClient GET /audit', () => {
+  it('인증 헤더로 기록을 받고 형식이 다르면 거부한다', async () => {
+    const events = [{ at: '2026-11-15T00:00:00.000Z', endpoint: '/ai/s2-news', status: 'ok', statusCode: 200, durationMs: 3 }]
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ events })).mockResolvedValueOnce(jsonResponse({ events: [{ at: 1 }] }))
+    const client = new RelayClient({ fetcher })
+    await expect(client.audit()).rejects.toMatchObject({ kind: 'configuration' })
+    client.configure('http://127.0.0.1:3000', 'token')
+    await expect(client.audit()).resolves.toEqual(events)
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('Authorization')).toBe('Bearer token')
+    await expect(client.audit()).rejects.toMatchObject({ kind: 'invalid_response' })
+  })
+})
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
