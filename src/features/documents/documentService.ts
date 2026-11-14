@@ -43,6 +43,13 @@ export class DocumentService {
         throw new DocumentGenerationError('AI 문구가 아직 생성·검토되지 않아 S2를 승인할 수 없습니다.')
       }
     }
+    if (doc.docType === 'S5') {
+      const artifact = doc.content as LocalDocumentArtifact | undefined
+      // 검토 중인 AI 초안이 남아 있으면 승인하지 않는다. 문구를 만들지 않았다면 로컬 기본 문구를 쓴다.
+      if (artifact?.type === 'S5' && artifact.narrativeSlots?.some((slot) => slot.state === 'draft')) {
+        throw new DocumentGenerationError('검토 중인 보고 본문이 있습니다. 승인하거나 기본 문구로 되돌린 뒤 문서를 승인해 주세요.')
+      }
+    }
     if (!doc.sourceFingerprint || doc.sourceFingerprint !== await this.currentFingerprint(doc)) {
       await this.markStale(doc, '기준 데이터가 변경되어 재검토가 필요합니다.')
       throw new DocumentGenerationError('기준 데이터가 변경되었습니다. 문서를 다시 생성해 주세요.')

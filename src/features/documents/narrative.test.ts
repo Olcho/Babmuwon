@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BabmuwonDatabase, VersionRepository, type MealPlan, type YearMonth } from '../../data'
 import { RelayApiError, type RelayAiResponse, type RelayHealth } from '../relay/relayClient'
 import { DocumentService } from './documentService'
-import type { S2Document } from './documentModels'
-import { NarrativeError, S2NarrativeService, type NarrativeClient } from './s2Narrative'
+import { reportBodyText } from './documentBuilders'
+import { createDocumentWorkbook } from './documentExporters'
+import type { S2Document, S5Document } from './documentModels'
+import { NarrativeError, NarrativeService, type NarrativeClient } from './narrative'
 
 const at = '2026-11-15T00:00:00.000Z'
 const aiResponse = (overrides: Partial<RelayAiResponse> = {}): RelayAiResponse => ({
@@ -23,13 +25,15 @@ class FakeClient implements NarrativeClient {
   async health(): Promise<RelayHealth> { return { status: 'ok', service: 'mawd-relay', linerMode: this.linerMode, channelMode: 'mock', localOnly: true } }
   async s2News(input: unknown) { this.newsCalls.push(input); if (this.failure) throw this.failure; return this.response }
   async nutrition(input: unknown) { this.nutritionCalls.push(input); if (this.failure) throw this.failure; return this.response }
+  s5Calls: unknown[] = []
+  async s5Body(input: unknown) { this.s5Calls.push(input); if (this.failure) throw this.failure; return this.response }
 }
 
 describe('S2 AI 문구 생성·검토 (Mock Relay)', () => {
   let database: BabmuwonDatabase
   let documents: DocumentService
   let client: FakeClient
-  let narrative: S2NarrativeService
+  let narrative: NarrativeService
   let docId: string
 
   beforeEach(async () => {
@@ -37,7 +41,7 @@ describe('S2 AI 문구 생성·검토 (Mock Relay)', () => {
     await database.open()
     documents = new DocumentService(database)
     client = new FakeClient()
-    narrative = new S2NarrativeService(database, client)
+    narrative = new NarrativeService(database, client)
     await seedPlan('2026-12')
     await database.students.add({ id: 's1', grade: 1, class: 2, number: 3, alias: '구름-27', realName: '홍길동', needsSubstitute: true, memo: '', createdAt: at, updatedAt: at })
     await database.schools.add({ id: 'school', name: '가상초등학교', principal: 'P', manager: 'M', phone: '02-000-0000', headcount: 1 })
@@ -139,8 +143,9 @@ describe('S2 AI 문구 생성·검토 (Mock Relay)', () => {
     await narrative.generateNews(docId, ['닭갈비'])
     client.failure = new Error('x')
     await expect(narrative.generateNutrition(docId, 'food_waste')).rejects.toThrow()
-    expect((await database.apiCallLogs.toArray()).map((log) => [log.endpoint, log.status, log.allowedFields])).toEqual([
-      ['/ai/s2-news', 'ok', { month: '2026-12', menus: ['닭갈비'] }], ['/ai/nutrition', 'error', { topicId: 'food_waste' }],
+    const logs = (await database.apiCallLogs.toArray()).sort((a, b) => a.endpoint.localeCompare(b.endpoint)) // 키가 UUID라 저장 순서가 보장되지 않는다
+    expect(logs.map((log) => [log.endpoint, log.status, log.allowedFields])).toEqual([
+      ['/ai/nutrition', 'error', { topicId: 'food_waste' }], ['/ai/s2-news', 'ok', { month: '2026-12', menus: ['닭갈비'] }],
     ])
   })
 
@@ -169,4 +174,97 @@ describe('S2 AI 문구 생성·검토 (Mock Relay)', () => {
     await database.mealEntries.bulkPut([entry(1, '주찬', '닭갈비'), entry(1, '국', '미역국'), entry(1, '후식', '귤')])
     await new VersionRepository(database).bump('planVersion')
   }
+})
+
+describe('S5 AI 본문 생성·검토 (Mock Relay)', () => {
+  let database: BabmuwonDatabase
+  let documents: DocumentService
+  let client: FakeClient
+  let narrative: NarrativeService
+  let docId: string
+  const allChecked = { sourceChecked: true, noMedicalClaim: true, factsChecked: true }
+
+  beforeEach(async () => {
+    database = new BabmuwonDatabase(`s5-narrative-${crypto.randomUUID()}`)
+    await database.open()
+    documents = new DocumentService(database)
+    client = new FakeClient()
+    narrative = new NarrativeService(database, client)
+    for (const n of [1, 2, 3, 4]) {
+      await database.students.add({ id: `s${n}`, grade: n === 4 ? 2 : 1, class: 1, number: n, alias: `구름-0${n}`, realName: `실명${n}`, needsSubstitute: true, memo: '', createdAt: at, updatedAt: at })
+      await database.studentAllergies.add({ id: `a${n}`, studentId: `s${n}`, allergenNo: n === 4 ? 5 : 1 })
+    }
+    docId = (await documents.generateS5('2026')).id
+  })
+  afterEach(async () => { database.close(); await database.delete() })
+
+  const artifact = async () => (await database.generatedDocs.get(docId))!.content as S5Document
+
+  it('비식별 집계만 전송하고 로컬 통계·표는 정확한 값을 유지한다', async () => {
+    const draft = await narrative.generateS5Body(docId)
+    const request = client.s5Calls[0] as { counts: { byAllergen: { allergenNo: number; students: unknown }[]; byGrade: unknown[]; provided: unknown; excluded: unknown } }
+    expect(Object.keys(request)).toEqual(['counts'])
+    expect(request.counts.byAllergen.find((item) => item.allergenNo === 1)?.students).toBe(3)
+    expect(request.counts.byAllergen.find((item) => item.allergenNo === 5)?.students).toBe('3명 미만')
+    expect(request.counts.byGrade).toEqual([{ grade: 1, students: 3 }, { grade: 2, students: '3명 미만' }])
+    for (const forbidden of ['구름', '실명', 's1', 'totalStudents']) expect(JSON.stringify(request)).not.toContain(forbidden)
+    expect((await artifact()).byAllergen.find((item) => item.allergenNo === 5)?.students).toBe(1)
+    expect(draft).toMatchObject({ docType: 'S5', field: 'annualReportBody', source: 'router', approved: false, meta: { simulated: true, sourceMissing: true, reviewRequired: true } })
+    expect((await database.apiCallLogs.toArray())[0]).toMatchObject({ endpoint: '/ai/s5-body', status: 'ok' })
+  })
+
+  it('AI 초안은 승인 전까지 보고서 본문에 반영되지 않고 승인 후에만 반영된다', async () => {
+    await narrative.generateS5Body(docId)
+    expect(reportBodyText(await artifact())).toBe((await artifact()).reportText)
+    await expect(documents.approve(docId)).rejects.toThrow('검토 중인 보고 본문')
+    await expect(narrative.approveText(docId, 'annualReportBody')).rejects.toThrow('검토 항목')
+    await narrative.saveText(docId, 'annualReportBody', '수정한 보고 본문')
+    await narrative.setChecklist(docId, 'annualReportBody', allChecked)
+    expect(reportBodyText(await artifact())).toBe((await artifact()).reportText)
+    await narrative.approveText(docId, 'annualReportBody')
+    expect(reportBodyText(await artifact())).toBe('수정한 보고 본문')
+    expect(createDocumentWorkbook(await artifact()).Sheets['운영 보고']?.B1?.v).toBe('수정한 보고 본문')
+    await expect(documents.approve(docId)).resolves.toMatchObject({ status: 'approved' })
+  })
+
+  it('AI 본문을 쓰지 않아도 로컬 기본 문구로 S5를 승인할 수 있고, 실패해도 초안은 바뀌지 않는다', async () => {
+    client.failure = new RelayApiError('server', '장애', { status: 503, code: 'LINER_RATE_LIMITED' })
+    await expect(narrative.generateS5Body(docId)).rejects.toMatchObject({ code: 'LINER_RATE_LIMITED' })
+    expect((await artifact()).narrativeSlots?.[0]?.state).toBe('not_generated')
+    await expect(documents.approve(docId)).resolves.toMatchObject({ status: 'approved' })
+  })
+
+  it('기본 문구 되돌리기는 로컬 보고 문구를 넣고 직접 승인한다', async () => {
+    await narrative.generateS5Body(docId)
+    const template = await narrative.useTemplate(docId, 'annualReportBody')
+    expect(template).toMatchObject({ source: 'template', text: (await artifact()).reportText })
+    await narrative.approveText(docId, 'annualReportBody')
+    await expect(documents.approve(docId)).resolves.toMatchObject({ status: 'approved' })
+  })
+
+  it('live Liner·미연결·승인된 문서·이전 형식 문서에서는 요청하지 않는다', async () => {
+    client.linerMode = 'live'
+    await expect(narrative.generateS5Body(docId)).rejects.toThrow('live')
+    client.linerMode = 'mock'; client.token = false
+    await expect(narrative.generateS5Body(docId)).rejects.toThrow('연결되어 있지 않습니다')
+    expect(client.s5Calls).toHaveLength(0)
+    client.token = true
+    const doc = (await database.generatedDocs.get(docId))!
+    const { narrativeSlots: _omit, ...legacy } = doc.content as S5Document
+    await database.generatedDocs.put({ ...doc, content: legacy })
+    await expect(narrative.generateS5Body(docId)).rejects.toThrow('이전 형식')
+    await database.generatedDocs.put(doc)
+    await documents.approve(docId)
+    await expect(narrative.generateS5Body(docId)).rejects.toBeInstanceOf(NarrativeError)
+  })
+
+  it('기준 데이터가 바뀐 S5는 다시 생성하기 전까지 요청하지 않는다', async () => {
+    await database.studentAllergies.add({ id: 'extra', studentId: 's2', allergenNo: 7 })
+    await expect(narrative.generateS5Body(docId)).rejects.toThrow('다시 생성')
+    expect(client.s5Calls).toHaveLength(0)
+  })
+
+  it('S2 키로 S5 문서를 수정할 수 없다', async () => {
+    await expect(narrative.saveText(docId, 'monthlyNews', 'x')).rejects.toBeInstanceOf(NarrativeError)
+  })
 })

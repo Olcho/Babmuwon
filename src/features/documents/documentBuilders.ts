@@ -182,7 +182,14 @@ export function buildS5Document(
     type: 'S5', period: year, title: `${year}학년도 식품알레르기 운영현황 보고`, generatedAt,
     basedOn: pickVersions(basedOn), byAllergen, byGrade, providedCount, excludedCount, totalStudents,
     reportText: `${year}학년도 현재 등록 기준 알레르기 관리 학생은 ${totalStudents}명이며, 확정 대체식 제공 ${providedCount}건, 제외만 처리 ${excludedCount}건입니다. 본 통계는 이 기기의 로컬 데이터를 기준으로 작성되었습니다.`,
+    narrativeSlots: [{ key: 'annualReportBody', label: '운영 보고 본문', state: 'not_generated', source: 'router', text: '', citations: [] }],
   }
+}
+
+/** S5 보고 본문: 승인된 AI·직접 입력 문구가 있으면 그것을, 없으면 로컬 기본 문구를 쓴다. 표와 숫자는 항상 로컬 정확값이다. */
+export function reportBodyText(document: S5Document): string {
+  const slot = document.narrativeSlots?.find((item) => item.key === 'annualReportBody')
+  return slot?.state === 'approved' && slot.text.trim() ? slot.text : document.reportText
 }
 
 function menuLabel(entry: MealEntry): string {

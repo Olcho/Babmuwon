@@ -51,6 +51,21 @@ export const RELAY_ROUTER_TIMEOUT_MS = 40_000
 export const RELAY_SEARCH_TIMEOUT_MS = 70_000
 const MAX_MENU_CODE_POINTS = 200
 
+/** `POST /ai/substitute-evidence`. 학생과 연결되지 않은 일반 항목 번호(1~19)와 식품명만 보낸다. */
+export interface RelaySubstituteEvidenceRequest { allergenNo: number; foodName: string }
+
+/** 외부 전송용 집계 값: 정수 3~100000 또는 정확한 문자열 "3명 미만". 0·1·2는 FE에서 억제한다. */
+export const SUPPRESSED_COUNT = '3명 미만' as const
+export type RelaySafeCount = number | typeof SUPPRESSED_COUNT
+export interface RelayS5BodyRequest {
+  counts: {
+    byAllergen: { allergenNo: number; students: RelaySafeCount }[]
+    byGrade?: { grade: number; students: RelaySafeCount }[]
+    provided: RelaySafeCount
+    excluded: RelaySafeCount
+  }
+}
+
 export type RelayErrorKind =
   | 'configuration' // 토큰·주소 미설정 또는 요청 전 로컬 검증 실패
   | 'authentication' // 401
@@ -145,6 +160,19 @@ export class RelayClient {
       throw new RelayApiError('validation', '허용된 영양 교육 주제만 요청할 수 있습니다.')
     }
     return this.ai('/ai/nutrition', { topicId: input.topicId }, RELAY_SEARCH_TIMEOUT_MS)
+  }
+
+  async substituteEvidence(input: RelaySubstituteEvidenceRequest): Promise<RelayAiResponse> {
+    const foodName = input.foodName
+    if (!Number.isInteger(input.allergenNo) || input.allergenNo < 1 || input.allergenNo > 19
+      || typeof foodName !== 'string' || !foodName.trim() || [...foodName].length > MAX_MENU_CODE_POINTS) {
+      throw new RelayApiError('validation', '근거 검색은 알레르기 번호(1~19)와 식품명(200자 이하)만 보낼 수 있습니다.')
+    }
+    return this.ai('/ai/substitute-evidence', { allergenNo: input.allergenNo, foodName }, RELAY_SEARCH_TIMEOUT_MS)
+  }
+
+  async s5Body(input: RelayS5BodyRequest): Promise<RelayAiResponse> {
+    return this.ai('/ai/s5-body', toS5Body(input), RELAY_ROUTER_TIMEOUT_MS)
   }
 
   private async ai(path: string, body: unknown, timeoutMs: number): Promise<RelayAiResponse> {
@@ -253,6 +281,35 @@ function isS2StateResponse(value: unknown): value is RelayS2StateResponse {
   return typeof item.month === 'string' && typeof item.planConfirmed === 'boolean' && typeof item.approved === 'boolean'
     && ['planVersion', 'docVersion', 'basedOnPlanVersion'].every((key) => Number.isSafeInteger(item[key]))
     && item.approvalSource === 'local-client-attestation'
+}
+
+/** 백엔드 validateS5와 같은 규칙으로 검사하고, 허용된 필드만 복사해 새 객체로 만든다. */
+function toS5Body(input: RelayS5BodyRequest): RelayS5BodyRequest {
+  const fail = () => { throw new RelayApiError('validation', 'S5 집계 요청 형식이 올바르지 않습니다. 0~2명 집계는 "3명 미만"으로 바꿔야 합니다.') }
+  const safe = (value: unknown): RelaySafeCount => {
+    if (value === SUPPRESSED_COUNT) return value
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 3 || value > 100_000) return fail() as never
+    return value
+  }
+  const counts = input?.counts
+  if (!counts || !Array.isArray(counts.byAllergen) || counts.byAllergen.length > 19) return fail() as never
+  const allergens = new Set<number>()
+  const byAllergen = counts.byAllergen.map((item) => {
+    if (!Number.isInteger(item.allergenNo) || item.allergenNo < 1 || item.allergenNo > 19 || allergens.has(item.allergenNo)) return fail() as never
+    allergens.add(item.allergenNo)
+    return { allergenNo: item.allergenNo, students: safe(item.students) }
+  })
+  let byGrade: { grade: number; students: RelaySafeCount }[] | undefined
+  if (counts.byGrade !== undefined) {
+    if (!Array.isArray(counts.byGrade) || counts.byGrade.length > 6) return fail() as never
+    const grades = new Set<number>()
+    byGrade = counts.byGrade.map((item) => {
+      if (!Number.isInteger(item.grade) || item.grade < 1 || item.grade > 6 || grades.has(item.grade)) return fail() as never
+      grades.add(item.grade)
+      return { grade: item.grade, students: safe(item.students) }
+    })
+  }
+  return { counts: { byAllergen, ...(byGrade ? { byGrade } : {}), provided: safe(counts.provided), excluded: safe(counts.excluded) } }
 }
 
 function isAiResponse(value: unknown): value is RelayAiResponse {

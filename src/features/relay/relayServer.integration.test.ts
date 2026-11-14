@@ -49,6 +49,23 @@ describe.skipIf(!url)('실제 Relay 서버(mock 모드) 통합', () => {
     await expect(client.syncS2State({ ...base, planVersion: 1, docVersion: 1, basedOnPlanVersion: 1 })).rejects.toMatchObject({ kind: 'conflict', code: 'VERSION_REGRESSION' })
   })
 
+  it('/ai/substitute-evidence는 알레르기 번호와 식품명으로 모의 근거를 반환한다', async () => {
+    const response = await client.substituteEvidence({ allergenNo: 1, foodName: '두부조림' })
+    expect(response).toMatchObject({ simulated: true, reviewRequired: true, source: 'mock' })
+    expect(response.text.length).toBeGreaterThan(0)
+  })
+
+  it('/ai/s5-body는 비식별 집계로 모의 본문을 반환하고, 0~2 소수 집계는 서버도 400으로 거부한다', async () => {
+    const counts = { byAllergen: [{ allergenNo: 1, students: 5 }, { allergenNo: 5, students: '3명 미만' as const }], byGrade: [{ grade: 1, students: '3명 미만' as const }], provided: 12, excluded: '3명 미만' as const }
+    await expect(client.s5Body({ counts })).resolves.toMatchObject({ simulated: true, source: 'mock' })
+    const raw = await fetch(`${url}/ai/s5-body`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ counts: { ...counts, provided: 2 } }),
+    })
+    expect(raw.status).toBe(400)
+    expect(await raw.json()).toEqual({ error: 'BLOCKED_BY_PRIVACY_POLICY' })
+  })
+
   it('서버는 메뉴명 내용을 검사하지 않는다(FE 로컬 검사가 유일한 방어선임을 확인)', async () => {
     const response = await client.s2News({ month: '2026-12', menus: ['1학년 2반 3번 홍길동 010-1234-5678'] })
     expect(response.simulated).toBe(true)

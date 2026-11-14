@@ -2,20 +2,25 @@ import {
   DocumentRepository, db,
   type AiDraftMeta, type BabmuwonDatabase, type GeneratedDoc, type ReviewChecklist, type TextDraft,
 } from '../../data'
-import { ALLOW_LIVE_LINER, PrivacyBlockedError, assertPublicMenus, loadPrivacyTerms } from '../relay/aiPrivacyGuard'
+import { LinerModeBlockedError, assertMockLiner, logAiCall } from '../relay/aiGate'
+import { PrivacyBlockedError, assertPublicMenus, loadPrivacyTerms } from '../relay/aiPrivacyGuard'
 import {
   RELAY_NUTRITION_TOPICS, RelayApiError, relayClient,
-  type RelayAiResponse, type RelayHealth, type RelayNutritionRequest, type RelayNutritionTopicId, type RelayS2NewsRequest,
+  type RelayAiResponse, type RelayHealth, type RelayNutritionRequest, type RelayNutritionTopicId, type RelayS2NewsRequest, type RelayS5BodyRequest,
 } from '../relay/relayClient'
-import type { NarrativeSlot, S2Document } from './documentModels'
+import { DocumentService } from './documentService'
+import type { NarrativeKey, NarrativeSlot, S2Document, S5Document } from './documentModels'
+import { anonymizeS5Counts } from './s5Anonymize'
 
 /**
- * S2 '이달의 소식'·'영양 정보' 문구 흐름 (명세 6-1, R-16, R-17).
+ * S2 '이달의 소식'·'영양 정보', S5 '운영 보고 본문' 문구 흐름 (명세 6-1, R-16, R-17).
  * AI 응답은 항상 초안으로만 저장한다. 검토 체크 3개와 명시적 승인 없이는 문서에 반영되지 않는다.
- * TextDraft는 검토 기록, S2Document.narrativeSlots는 문서 반영본이다.
+ * TextDraft는 검토 기록, 문서의 narrativeSlots는 문서 반영본이다.
  */
-export type NarrativeKey = NarrativeSlot['key']
 export const NARRATIVE_KEYS: NarrativeKey[] = ['monthlyNews', 'nutritionEducation']
+export const S5_NARRATIVE_KEY: NarrativeKey = 'annualReportBody'
+const KEY_DOC_TYPE: Record<NarrativeKey, GeneratedDoc['docType']> = { monthlyNews: 'S2', nutritionEducation: 'S2', annualReportBody: 'S5' }
+export type { NarrativeKey }
 
 export const NUTRITION_TOPIC_LABELS: Record<RelayNutritionTopicId, string> = {
   balanced_meals: '균형 잡힌 식사', seasonal_foods: '제철 식재료', food_allergy_basics: '식품 알레르기 표시의 이해',
@@ -23,8 +28,7 @@ export const NUTRITION_TOPIC_LABELS: Record<RelayNutritionTopicId, string> = {
 }
 
 export class NarrativeError extends Error {}
-/** 서버 측 개인정보 차단이 검증되지 않아 live Liner로는 요청하지 않는다. */
-export class LinerModeBlockedError extends NarrativeError {}
+export { LinerModeBlockedError }
 
 export const EMPTY_CHECKLIST: ReviewChecklist = { sourceChecked: false, noMedicalClaim: false, factsChecked: false }
 const MAX_TEXT = 2000
@@ -34,36 +38,39 @@ export interface NarrativeClient {
   health(): Promise<RelayHealth>
   s2News(input: RelayS2NewsRequest): Promise<RelayAiResponse>
   nutrition(input: RelayNutritionRequest): Promise<RelayAiResponse>
+  s5Body(input: RelayS5BodyRequest): Promise<RelayAiResponse>
 }
 
-export class S2NarrativeService {
+export class NarrativeService {
   private readonly database: BabmuwonDatabase
   private readonly client: NarrativeClient
   private readonly documents: DocumentRepository
+  private readonly documentService: DocumentService
 
   constructor(database: BabmuwonDatabase, client: NarrativeClient) {
     this.database = database
     this.client = client
     this.documents = new DocumentRepository(database)
+    this.documentService = new DocumentService(database)
   }
 
   /** 문서 월의 확정 식단에 있는 공개 메뉴명(중복 제거). 대표 메뉴 선택지로 쓴다. */
   async listMenuCandidates(docId: string): Promise<{ all: string[]; suggested: string[] }> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, 'monthlyNews')
     const entries = await this.confirmedEntries(doc)
     const all = [...new Set(entries.map((entry) => entry.menuName))]
     const main = [...new Set(entries.filter((entry) => entry.slot === '주찬').map((entry) => entry.menuName))]
     return { all, suggested: [...main, ...all.filter((name) => !main.includes(name))].slice(0, 3) }
   }
 
-  async getDrafts(docId: string): Promise<Record<NarrativeKey, TextDraft | undefined>> {
+  async getDrafts(docId: string): Promise<Partial<Record<NarrativeKey, TextDraft>>> {
     const drafts = await this.documents.getDrafts(docId)
-    return { monthlyNews: drafts.find((d) => d.field === 'monthlyNews'), nutritionEducation: drafts.find((d) => d.field === 'nutritionEducation') }
+    return Object.fromEntries(drafts.map((draft) => [draft.field, draft]))
   }
 
   /** `POST /ai/s2-news`: 월과 대표 메뉴명만 전송한다. */
   async generateNews(docId: string, menus: string[]): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, 'monthlyNews')
     const body: RelayS2NewsRequest = { month: doc.yearMonth, menus }
     const publicMenus = new Set((await this.confirmedEntries(doc)).map((entry) => entry.menuName))
     return this.generate(doc, 'monthlyNews', '/ai/s2-news', { month: body.month, menus }, async () => {
@@ -74,16 +81,29 @@ export class S2NarrativeService {
 
   /** `POST /ai/nutrition`: 미리 정한 주제 ID만 전송한다. */
   async generateNutrition(docId: string, topicId: RelayNutritionTopicId): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, 'nutritionEducation')
     return this.generate(doc, 'nutritionEducation', '/ai/nutrition', { topicId }, async () => {
       if (!(RELAY_NUTRITION_TOPICS as readonly string[]).includes(topicId)) throw new NarrativeError('허용된 영양 교육 주제가 아닙니다.')
       return () => this.client.nutrition({ topicId })
     })
   }
 
+  /**
+   * `POST /ai/s5-body`: 로컬 통계에서 0~2를 "3명 미만"으로 바꾼 비식별 집계만 전송한다.
+   * 로컬 문서의 정확한 통계와 보고서 표는 바뀌지 않는다.
+   */
+  async generateS5Body(docId: string): Promise<TextDraft> {
+    const doc = await this.requireDraftDoc(docId, S5_NARRATIVE_KEY)
+    const artifact = doc.content as S5Document
+    if (!artifact.narrativeSlots) throw new NarrativeError('이전 형식의 S5 문서입니다. 문서를 다시 생성해 주세요.')
+    if (!await this.documentService.isCurrent(doc)) throw new NarrativeError('기준 데이터가 변경되었습니다. S5를 다시 생성한 뒤 문구를 만들어 주세요.')
+    const body = anonymizeS5Counts(artifact)
+    return this.generate(doc, S5_NARRATIVE_KEY, '/ai/s5-body', { counts: body.counts }, async () => () => this.client.s5Body(body))
+  }
+
   /** 직접 입력 또는 AI 초안 수정. 수정하면 검토 체크와 승인이 모두 초기화된다. */
   async saveText(docId: string, key: NarrativeKey, text: string): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, key)
     const value = text.trim()
     if (!value) throw new NarrativeError('문구를 입력해 주세요.')
     if (value.length > MAX_TEXT) throw new NarrativeError(`문구는 ${MAX_TEXT}자 이하여야 합니다.`)
@@ -98,18 +118,20 @@ export class S2NarrativeService {
 
   /** Relay 실패·오프라인 때 쓰는 기존 로컬 기본 문구(R-17). */
   async useTemplate(docId: string, key: NarrativeKey): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, key)
     const month = Number(doc.yearMonth.slice(5))
     const text = key === 'monthlyNews'
       ? `${month}월 급식 안내입니다. 이달 식단과 알레르기 유발식품 표시를 확인해 주세요.`
-      : '다양한 음식을 골고루 먹고 충분히 물을 마시는 습관이 건강한 식생활의 기본입니다.'
+      : key === 'nutritionEducation'
+        ? '다양한 음식을 골고루 먹고 충분히 물을 마시는 습관이 건강한 식생활의 기본입니다.'
+        : (doc.content as S5Document).reportText
     const draft = this.newDraft(doc, key, 'template', text, [])
     await this.persist(doc, key, draft)
     return draft
   }
 
   async setChecklist(docId: string, key: NarrativeKey, checklist: ReviewChecklist): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, key)
     const draft = (await this.getDrafts(docId))[key]
     if (!draft) throw new NarrativeError('검토할 문구가 없습니다.')
     // 체크 변경은 기존 승인을 해제한다. 승인은 항상 별도의 명시적 동작이다.
@@ -120,7 +142,7 @@ export class S2NarrativeService {
 
   /** 승인해야만 문서에 반영된다. AI 초안은 검토 체크 3개가 모두 필요하다. */
   async approveText(docId: string, key: NarrativeKey): Promise<TextDraft> {
-    const doc = await this.requireDraftS2(docId)
+    const doc = await this.requireDraftDoc(docId, key)
     const draft = (await this.getDrafts(docId))[key]
     if (!draft || !draft.text.trim()) throw new NarrativeError('승인할 문구가 없습니다.')
     if (isAiSource(draft.source)) {
@@ -140,19 +162,15 @@ export class S2NarrativeService {
     let call: () => Promise<RelayAiResponse>
     try { call = await prepare() }
     catch (error) {
-      await this.log(endpoint, {}, 'blocked')
+      await logAiCall(this.database, endpoint, {}, 'blocked')
       throw error
     }
-    try {
-      await this.assertMockOnly()
-    } catch (error) {
-      await this.log(endpoint, {}, 'blocked')
-      throw error
-    }
+    try { await assertMockLiner(this.client) }
+    catch (error) { await logAiCall(this.database, endpoint, {}, 'blocked'); throw error }
     let response: RelayAiResponse
     try { response = await call() }
-    catch (error) { await this.log(endpoint, allowedFields, 'error'); throw error }
-    await this.log(endpoint, allowedFields, response.cached ? 'cached' : 'ok')
+    catch (error) { await logAiCall(this.database, endpoint, allowedFields, 'error'); throw error }
+    await logAiCall(this.database, endpoint, allowedFields, response.cached ? 'cached' : 'ok')
 
     const meta: AiDraftMeta = {
       simulated: response.simulated, sourceMissing: response.sourceMissing,
@@ -160,25 +178,15 @@ export class S2NarrativeService {
       reviewRequired: true, cached: response.cached, upstream: response.source,
     }
     const draft: TextDraft = {
-      ...this.newDraft(doc, key, key === 'monthlyNews' ? 'router' : 'liner', response.text, response.citations), meta,
+      ...this.newDraft(doc, key, key === 'nutritionEducation' ? 'liner' : 'router', response.text, response.citations), meta,
     }
     await this.persist(doc, key, draft)
     return draft
   }
 
-  /** live Liner는 서버 측 개인정보 차단 검증 전까지 호출하지 않는다. */
-  private async assertMockOnly(): Promise<void> {
-    const health = await this.client.health()
-    if (health.linerMode === 'mock') return
-    if (health.linerMode === 'live' && ALLOW_LIVE_LINER) return
-    throw new LinerModeBlockedError(health.linerMode === 'live'
-      ? 'Relay가 실제 Liner(live) 모드입니다. 서버 측 개인정보 차단이 검증되기 전에는 AI 요청을 보내지 않습니다. Mock 모드에서만 사용할 수 있습니다.'
-      : 'Relay의 Liner가 비활성화되어 있습니다.')
-  }
-
   private newDraft(doc: GeneratedDoc, key: NarrativeKey, source: TextDraft['source'], text: string, citations: TextDraft['citations']): TextDraft {
     return {
-      id: `${doc.id}:${key}`, generatedDocId: doc.id, docType: 'S2', field: key, source, text, citations: citations.map((c) => ({ ...c })),
+      id: `${doc.id}:${key}`, generatedDocId: doc.id, docType: doc.docType, field: key, source, text, citations: citations.map((c) => ({ ...c })),
       edited: false, reviewChecklist: { ...EMPTY_CHECKLIST }, approved: false,
     }
   }
@@ -187,8 +195,9 @@ export class S2NarrativeService {
   private async persist(doc: GeneratedDoc, key: NarrativeKey, draft: TextDraft): Promise<void> {
     await this.database.transaction('rw', this.database.generatedDocs, this.database.textDrafts, async () => {
       const fresh = await this.database.generatedDocs.get(doc.id)
-      if (!fresh || fresh.status !== 'draft') throw new NarrativeError('초안 상태의 S2만 문구를 수정할 수 있습니다.')
-      const content = fresh.content as S2Document
+      if (!fresh || fresh.status !== 'draft') throw new NarrativeError('초안 상태의 문서만 문구를 수정할 수 있습니다.')
+      const content = fresh.content as S2Document | S5Document
+      if (!content.narrativeSlots?.some((slot) => slot.key === key)) throw new NarrativeError('이전 형식의 문서입니다. 문서를 다시 생성해 주세요.')
       const slots = content.narrativeSlots.map((slot): NarrativeSlot => slot.key !== key ? slot : {
         ...slot, state: draft.approved ? 'approved' : 'draft', source: draft.source === 'router' || draft.source === 'liner' || draft.source === 'template' ? draft.source : 'manual',
         text: draft.text, citations: draft.citations,
@@ -199,21 +208,16 @@ export class S2NarrativeService {
     })
   }
 
-  private async log(endpoint: string, allowedFields: Record<string, unknown>, status: 'ok' | 'blocked' | 'error' | 'cached') {
-    // 허용 필드 값만 남기고 차단된 요청의 값은 기록하지 않는다(E6).
-    await this.database.apiCallLogs.add({ id: crypto.randomUUID(), at: new Date().toISOString(), endpoint, allowedFields, status })
-  }
-
   private async confirmedEntries(doc: GeneratedDoc) {
     const plan = await this.database.mealPlans.where('yearMonth').equals(doc.yearMonth).first()
     if (!plan || plan.status !== 'confirmed') throw new NarrativeError('확정된 월간 식단이 필요합니다.')
     return this.database.mealEntries.where('mealPlanId').equals(plan.id).toArray()
   }
 
-  private async requireDraftS2(docId: string): Promise<GeneratedDoc> {
+  private async requireDraftDoc(docId: string, key: NarrativeKey): Promise<GeneratedDoc> {
     const doc = await this.documents.get(docId)
-    if (!doc || doc.docType !== 'S2' || !doc.content) throw new NarrativeError('S2 문서를 찾을 수 없습니다.')
-    if (doc.status !== 'draft') throw new NarrativeError('초안 상태의 S2만 문구를 수정할 수 있습니다. 승인·재검토 문서는 다시 생성해 주세요.')
+    if (!doc || doc.docType !== KEY_DOC_TYPE[key] || !doc.content) throw new NarrativeError(`${KEY_DOC_TYPE[key]} 문서를 찾을 수 없습니다.`)
+    if (doc.status !== 'draft') throw new NarrativeError(`초안 상태의 ${doc.docType}만 문구를 수정할 수 있습니다. 승인·재검토 문서는 다시 생성해 주세요.`)
     return doc
   }
 }
@@ -228,7 +232,7 @@ export function missingChecks(checklist: ReviewChecklist): string[] {
 
 /** UI용: 오류를 사용자에게 보여줄 한국어 메시지로 바꾼다. */
 export function describeNarrativeError(error: unknown): string {
-  if (error instanceof PrivacyBlockedError || error instanceof NarrativeError) return error.message
+  if (error instanceof PrivacyBlockedError || error instanceof NarrativeError || error instanceof LinerModeBlockedError) return error.message
   if (error instanceof RelayApiError) {
     const code = error.code ? ` (${error.code})` : ''
     return `${error.message}${code} 직접 입력하거나 기본 문구를 사용할 수 있습니다.`
@@ -236,4 +240,4 @@ export function describeNarrativeError(error: unknown): string {
   return 'AI 문구를 생성하지 못했습니다. 직접 입력하거나 기본 문구를 사용할 수 있습니다.'
 }
 
-export const s2NarrativeService = new S2NarrativeService(db, relayClient)
+export const narrativeService = new NarrativeService(db, relayClient)

@@ -180,6 +180,54 @@ describe('RelayClient POST /ai/*', () => {
   })
 })
 
+describe('RelayClient POST /ai/substitute-evidence, /ai/s5-body', () => {
+  const connect = (fetcher: typeof fetch) => { const client = new RelayClient({ fetcher }); client.configure('http://127.0.0.1:3000', 'local-secret'); return client }
+  const ok = () => vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse(aiBody))
+  const counts = { byAllergen: [{ allergenNo: 1, students: 5 }, { allergenNo: 2, students: '3명 미만' as const }], byGrade: [{ grade: 1, students: '3명 미만' as const }], provided: 12, excluded: '3명 미만' as const }
+
+  it('substitute-evidence는 알레르기 번호와 식품명만 보낸다', async () => {
+    const fetcher = ok()
+    await expect(connect(fetcher).substituteEvidence({ allergenNo: 1, foodName: '두부조림', studentId: 's1' } as never)).resolves.toMatchObject({ simulated: true })
+    expect(fetcher.mock.calls[0]![0]).toBe('http://127.0.0.1:3000/ai/substitute-evidence')
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({ allergenNo: 1, foodName: '두부조림' })
+  })
+
+  it('substitute-evidence 요청 형식 오류는 전송 전에 거부한다', async () => {
+    const fetcher = ok(); const client = connect(fetcher)
+    for (const bad of [{ allergenNo: 0, foodName: 'a' }, { allergenNo: 20, foodName: 'a' }, { allergenNo: 1.5, foodName: 'a' }, { allergenNo: 1, foodName: ' ' }, { allergenNo: 1, foodName: '가'.repeat(201) }]) {
+      await expect(client.substituteEvidence(bad)).rejects.toMatchObject({ kind: 'validation' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('s5-body는 counts만 보내고 허용되지 않은 필드는 복사하지 않는다', async () => {
+    const fetcher = ok()
+    await connect(fetcher).s5Body({ counts, totalStudents: 99, students: [{ alias: '구름-01' }] } as never)
+    expect(fetcher.mock.calls[0]![0]).toBe('http://127.0.0.1:3000/ai/s5-body')
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({ counts })
+    expect(String(fetcher.mock.calls[0]![1]?.body)).not.toContain('구름')
+  })
+
+  it('s5-body는 0~2 같은 소수 집계와 중복·범위 오류를 전송 전에 거부한다', async () => {
+    const fetcher = ok(); const client = connect(fetcher)
+    const bad = [
+      { ...counts, provided: 2 }, { ...counts, excluded: 0 }, { ...counts, provided: 1.5 }, { ...counts, provided: '2명' },
+      { ...counts, byAllergen: [{ allergenNo: 1, students: 1 }] }, { ...counts, byGrade: [{ grade: 1, students: 0 }] },
+      { ...counts, byAllergen: [{ allergenNo: 1, students: 5 }, { allergenNo: 1, students: 6 }] }, { ...counts, byAllergen: [{ allergenNo: 20, students: 5 }] },
+      { ...counts, byGrade: [{ grade: 7, students: 5 }] }, { ...counts, provided: 100_001 },
+    ]
+    for (const value of bad) await expect(client.s5Body({ counts: value as never })).rejects.toMatchObject({ kind: 'validation' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([[400, 'BLOCKED_BY_PRIVACY_POLICY', 'validation'], [401, 'UNAUTHORIZED', 'authentication'], [403, 'HOST_NOT_ALLOWED', 'forbidden'], [429, 'RELAY_BUSY', 'rate_limited'], [504, 'LINER_TIMEOUT', 'server']])(
+    '두 엔드포인트 모두 HTTP %i를 %s → %s로 분류한다', async (status, code, kind) => {
+      const client = connect(vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ error: code }, status)))
+      await expect(client.s5Body({ counts })).rejects.toMatchObject({ kind, status, code })
+      await expect(client.substituteEvidence({ allergenNo: 1, foodName: '두부조림' })).rejects.toMatchObject({ kind, status, code })
+    })
+})
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }

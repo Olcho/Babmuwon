@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AllergenNo, YearMonth } from '../../data'
 import { parseAllergenValue } from '../meal-plan'
 import { ALLERGEN_ITEMS } from '../students'
+import { EvidencePanel } from './EvidencePanel'
 import {
   substitutionService,
   type SubstitutionItem,
@@ -158,6 +159,10 @@ function SubstitutionCard({ item, draft, busy, updateDraft, confirm, cancel }: {
           ) : (
             <div className="direct-substitute"><label>대체 메뉴명<input value={value.directName} onChange={(event) => updateDraft(id, { directName: event.target.value })} /></label><label>알레르기 번호<input placeholder="예: 1.5 또는 없음" value={value.directAllergens} onChange={(event) => updateDraft(id, { directAllergens: event.target.value })} /></label></div>
           )}
+          {value.mode === 'recommended' && (() => {
+            const selected = item.candidates.find((candidate) => candidate.key === value.candidateKey)
+            return selected ? <EvidencePanel key={selected.key} candidateName={selected.name} allergenOptions={item.original.allergenNos} /> : null
+          })()}
           <label className="processed-check"><input type="checkbox" checked={value.checked} onChange={(event) => updateDraft(id, { checked: event.target.checked })} /> 가공품 원재료와 교차접촉 가능성을 확인했습니다.</label>
           <div className="substitution-actions">{confirmed && <button type="button" disabled={busy} onClick={() => void cancel(item)}>확정 취소</button>}<button type="button" className="primary" disabled={busy || !value.checked} onClick={() => void confirm(item)}>{confirmed ? '선택 내용으로 재확정' : '대체식 확정'}</button></div>
         </>

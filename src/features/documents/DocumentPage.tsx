@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { GeneratedDoc, YearMonth } from '../../data'
-import { S2NarrativeEditor } from './S2NarrativeEditor'
+import { S2NarrativeEditor, S5NarrativeEditor } from './NarrativeEditor'
 import { s2StateSync, type S2SendEligibility } from '../relay/s2StateSync'
-import { documentService, downloadDocumentXlsx, downloadS4Pdf, downloadS4Zip, type LocalDocumentArtifact, type S2Document, type S4Document, type SupportedDocumentType } from '.'
+import { documentService, downloadDocumentXlsx, reportBodyText, downloadS4Pdf, downloadS4Zip, type LocalDocumentArtifact, type S2Document, type S4Document, type SupportedDocumentType } from '.'
 
 const initialDate = new Date()
 
@@ -115,6 +115,7 @@ export function DocumentPage() {
           {selected.docType === 'S2' && eligibility?.docId === selected.id && <p className={eligibility?.eligible ? 'notice' : 'warning'} role="status">Relay 동기화: {deliveryLabel(selected.s2DeliveryState)} · {eligibility?.eligible ? '발송 가능 상태' : `발송 불가${eligibility?.reason ? ` — ${eligibility.reason}` : ''}`}</p>}
           {selected.status === 'stale' && <p className="warning">재검토 필요: {selected.staleReason}</p>}
           {selected.docType === 'S2' && <S2NarrativeEditor doc={selected} onChanged={() => refresh(selected.id)} />}
+          {selected.docType === 'S5' && <S5NarrativeEditor doc={selected} onChanged={() => refresh(selected.id)} />}
           <DocumentPreview artifact={selected.content as LocalDocumentArtifact} version={selected.docVersion} />
         </>}
       </section>
@@ -129,7 +130,7 @@ function DocumentPreview({ artifact, version }: { artifact: LocalDocumentArtifac
       : artifact.type === 'S2' ? <S2Preview artifact={artifact} />
         : artifact.type === 'S3' ? <table><thead><tr><th>날짜</th><th>학생</th><th>기존 메뉴</th><th>대체식</th><th>충돌 번호</th><th>확인 사항</th></tr></thead><tbody>{artifact.rows.map((row, index) => <tr key={`${row.date}-${index}`}><td>{row.date}</td><td>{row.studentDisplay}</td><td>{row.originalMenu}</td><td>{row.substituteMenu}</td><td>{row.allergenNos.join('.')}</td><td>{row.caution}</td></tr>)}</tbody></table>
           : artifact.type === 'S4' ? <S4Preview artifact={artifact} />
-            : <><p className="report-text">{artifact.reportText}</p><div className="summary"><div><span>관리 학생</span><strong>{artifact.totalStudents}명</strong></div><div><span>대체식 제공</span><strong>{artifact.providedCount}건</strong></div><div><span>제외 처리</span><strong>{artifact.excludedCount}건</strong></div></div><h3>알레르기 유발식품별 현황</h3><table><thead><tr><th>번호</th><th>항목</th><th>학생 수</th></tr></thead><tbody>{artifact.byAllergen.map((item) => <tr key={item.allergenNo}><td>{item.allergenNo}</td><td>{item.name}</td><td>{item.students}</td></tr>)}</tbody></table></>}
+            : <><p className="report-text">{reportBodyText(artifact)}</p>{artifact.narrativeSlots?.map((slot) => slot.state !== 'not_generated' && <p className="narrative-meta" key={slot.key}>{slot.state === 'approved' ? '승인된 본문' : '검토 중인 초안(승인 전 — 아직 반영되지 않음)'}{slot.simulated ? ' · 모의 결과' : ''}{slot.sourceMissing ? ' · 출처 없음' : ''}</p>)}<div className="summary"><div><span>관리 학생</span><strong>{artifact.totalStudents}명</strong></div><div><span>대체식 제공</span><strong>{artifact.providedCount}건</strong></div><div><span>제외 처리</span><strong>{artifact.excludedCount}건</strong></div></div><h3>알레르기 유발식품별 현황</h3><table><thead><tr><th>번호</th><th>항목</th><th>학생 수</th></tr></thead><tbody>{artifact.byAllergen.map((item) => <tr key={item.allergenNo}><td>{item.allergenNo}</td><td>{item.name}</td><td>{item.students}</td></tr>)}</tbody></table></>}
   </article>
 }
 

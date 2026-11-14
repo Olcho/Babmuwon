@@ -184,3 +184,5 @@ button.secondary { background: white; }
 .narrative-controls fieldset, .narrative-card fieldset { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; }
 .badge-simulated, .badge-warning { color: #92400e; background: #fef3c7; padding: 0 4px; }
 .narrative-meta { font-size: 0.85em; color: #64748b; }
+.evidence-panel { margin: 10px 0; padding: 10px; border: 1px dashed #94a3b8; border-radius: 8px; }
+.evidence-text, .outbound-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
