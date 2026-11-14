@@ -69,7 +69,20 @@ export class MealRepository {
 
   async unconfirm(planId: EntityId): Promise<void> {
     const now = new Date().toISOString()
-    await this.db.mealPlans.update(planId, { status: 'draft', confirmedAt: undefined, updatedAt: now })
+    await this.db.transaction('rw', this.db.mealPlans, this.db.generatedDocs, async () => {
+      const plan = await this.db.mealPlans.get(planId)
+      await this.db.mealPlans.update(planId, { status: 'draft', confirmedAt: undefined, updatedAt: now })
+      if (!plan) return
+      // 확정 해제 중에는 해당 월 S2 승인본을 사용할 수 없다. 다른 월과 다른 문서 종류는 건드리지 않는다.
+      const approved = await this.db.generatedDocs.where('status').anyOf('approved', 'sent')
+        .filter((doc) => doc.docType === 'S2' && doc.yearMonth === plan.yearMonth).toArray()
+      await this.db.generatedDocs.bulkPut(approved.map((doc) => ({
+        ...doc, status: 'stale' as const, approvedAt: undefined,
+        staleReason: `${plan.yearMonth} 식단 확정이 해제되어 재검토가 필요합니다.`,
+        correctionNeeded: doc.status === 'sent',
+        s2DeliveryState: 'sync_required' as const, updatedAt: now,
+      })))
+    })
   }
 
   async updateDraftEntry(entry: MealEntry): Promise<void> {

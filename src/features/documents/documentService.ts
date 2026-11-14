@@ -125,6 +125,19 @@ export class DocumentService {
     return doc
   }
 
+  /** 저장된 문서가 현재 로컬 데이터(확정 식단·학교 정보 등)로 다시 만든 결과와 같은지 확인한다. */
+  async isCurrent(doc: GeneratedDoc): Promise<boolean> {
+    if (!doc.sourceFingerprint) return false
+    try { return doc.sourceFingerprint === await this.currentFingerprint(doc) }
+    catch { return false }
+  }
+
+  /** 승인본이 더는 최신이 아니면 stale 처리한다. S2는 Relay에 무효화를 다시 보고해야 하므로 sync_required로 둔다. */
+  async invalidate(id: string, reason: string): Promise<GeneratedDoc> {
+    const doc = await this.requireDocument(id)
+    return this.markStale(doc, reason)
+  }
+
   private async currentFingerprint(doc: GeneratedDoc): Promise<string> {
     const artifact = doc.docType === 'S1' ? await this.buildS1(doc.yearMonth as YearMonth)
       : doc.docType === 'S2' ? await this.buildS2(doc.yearMonth as YearMonth)
@@ -142,8 +155,13 @@ export class DocumentService {
     return doc
   }
 
-  private async markStale(doc: GeneratedDoc, reason: string) {
-    await this.documents.save({ ...doc, status: 'stale', approvedAt: undefined, staleReason: reason, updatedAt: new Date().toISOString() })
+  private async markStale(doc: GeneratedDoc, reason: string): Promise<GeneratedDoc> {
+    const stale: GeneratedDoc = {
+      ...doc, status: 'stale', approvedAt: undefined, staleReason: reason, updatedAt: new Date().toISOString(),
+      s2DeliveryState: doc.docType === 'S2' && doc.s2DeliveryState !== 'not_connected' ? 'sync_required' : doc.s2DeliveryState,
+    }
+    await this.documents.save(stale)
+    return stale
   }
 }
 

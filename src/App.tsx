@@ -5,13 +5,18 @@ import { StudentAllergyPage } from './features/students/StudentAllergyPage'
 import { ConflictDetectionPage } from './features/conflicts/ConflictDetectionPage'
 import { SubstitutionPage } from './features/substitutions/SubstitutionPage'
 import { DocumentPage } from './features/documents/DocumentPage'
-import { RelayConnectionPage } from './features/relay'
+import { RelayConnectionPage, s2StateSync } from './features/relay'
 import './App.css'
 
 function allergenLabel(entry: MealEntry): string {
   if (entry.allergenStatus === 'unknown') return ''
   if (entry.allergenStatus === 'none_confirmed') return '없음'
   return entry.allergenNos.join('.')
+}
+
+function syncNotice(outcome: { status: string; message: string }): string {
+  // Relay 연결이 없거나 보고할 S2가 없는 경우는 조용히 넘어가고, 실패만 알린다.
+  return outcome.status === 'failed' ? ` S2 Relay 동기화 실패: ${outcome.message}` : outcome.status === 'synced' ? ' S2 무효 상태를 Relay에 동기화했습니다.' : ''
 }
 
 function MealPlanPage() {
@@ -83,12 +88,14 @@ function MealPlanPage() {
     try {
       if (plan.status === 'confirmed') {
         setStored(await mealPlanService.unconfirm(plan))
-        setMessage('확정을 해제했습니다. 다시 확정하기 전까지 후속 업무는 잠금 대상입니다.')
+        const sync = await s2StateSync.syncMonth(plan.yearMonth)
+        setMessage(`확정을 해제했습니다. 다시 확정하기 전까지 후속 업무는 잠금 대상입니다.${syncNotice(sync)}`)
       } else {
         const unknownCount = stored?.plan.unknownCount ?? 0
         if (unknownCount > 0 && !window.confirm(`미확인 메뉴가 ${unknownCount}개 있습니다. 탐지 결과가 불완전할 수 있습니다. 그래도 확정할까요?`)) return
         setStored(await mealPlanService.confirm(plan))
-        setMessage('식단을 확정했습니다. 식단 버전이 증가하고 기존 대체식·문서는 재검토 대상으로 변경됩니다.')
+        const sync = await s2StateSync.syncMonth(plan.yearMonth)
+        setMessage(`식단을 확정했습니다. 식단 버전이 증가하고 기존 대체식·문서는 재검토 대상으로 변경됩니다.${syncNotice(sync)}`)
       }
     } finally {
       setBusy(false)
