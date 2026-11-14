@@ -123,7 +123,7 @@ export function DocumentPage() {
   </main>
 }
 
-function DocumentPreview({ artifact, version }: { artifact: LocalDocumentArtifact; version: number }) {
+export function DocumentPreview({ artifact, version }: { artifact: LocalDocumentArtifact; version: number }) {
   return <article className="print-sheet">
     <header><h2>{artifact.title}</h2><p>문서 v{version} · 생성 {new Date(artifact.generatedAt).toLocaleString('ko-KR')}</p><p>기준 버전: 식단 {artifact.basedOn.planVersion} / 학생 {artifact.basedOn.studentVersion} / 대체식 {artifact.basedOn.substitutionVersion}</p></header>
     {artifact.type === 'S1' ? <MealTable rows={artifact.rows} slots={artifact.slots} />

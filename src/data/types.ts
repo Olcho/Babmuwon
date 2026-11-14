@@ -197,6 +197,15 @@ export interface SendBatch {
   templateCode: string
   status: 'requesting' | 'requested' | 'partial' | 'closed' | 'manual'
   createdAt: ISODateTime
+  /** true면 로컬 Mock 시연 기록. 실제 채널톡·알림톡으로 보내지 않았다. */
+  simulated?: boolean
+  updatedAt?: ISODateTime
+}
+
+export interface SendAttempt {
+  at: ISODateTime
+  result: 'requested' | 'request_failed'
+  errorCode?: string
 }
 
 export interface SendRecipient {
@@ -208,6 +217,9 @@ export interface SendRecipient {
   deliveryCheckedBy?: 'manual' | 'api'
   errorCode?: string
   retryCount: number
+  /** 모든 시도 이력(F5-6). */
+  attempts?: SendAttempt[]
+  updatedAt?: ISODateTime
 }
 
 export interface ApiCallLog {

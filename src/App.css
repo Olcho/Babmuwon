@@ -186,3 +186,7 @@ button.secondary { background: white; }
 .narrative-meta { font-size: 0.85em; color: #64748b; }
 .evidence-panel { margin: 10px 0; padding: 10px; border: 1px dashed #94a3b8; border-radius: 8px; }
 .evidence-text, .outbound-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 임시 UI: Mock 발송 */
+.mock-banner { border: 2px solid #f59e0b; }
+.mock-section { margin: 18px 0; padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.mock-preview { margin: 10px 0; padding: 12px; background: #f8fafc; border: 1px dashed #94a3b8; border-radius: 8px; }

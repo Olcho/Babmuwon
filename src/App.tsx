@@ -6,6 +6,7 @@ import { ConflictDetectionPage } from './features/conflicts/ConflictDetectionPag
 import { SubstitutionPage } from './features/substitutions/SubstitutionPage'
 import { DocumentPage } from './features/documents/DocumentPage'
 import { RelayConnectionPage, s2StateSync } from './features/relay'
+import { MockSendPage } from './features/sending'
 import './App.css'
 
 function allergenLabel(entry: MealEntry): string {
@@ -174,14 +175,14 @@ function MealPlanPage() {
 }
 
 function App() {
-  const [screen, setScreen] = useState<'students' | 'meals' | 'conflicts' | 'substitutions' | 'documents' | 'relay'>('students')
+  const [screen, setScreen] = useState<'students' | 'meals' | 'conflicts' | 'substitutions' | 'documents' | 'sending' | 'relay'>('students')
   return (
     <>
       <nav className="screen-nav" aria-label="업무 화면">
         <strong>밥무원</strong>
-        <div><button type="button" className={screen === 'students' ? 'active' : ''} onClick={() => setScreen('students')}>학생 알레르기 등록</button><button type="button" className={screen === 'meals' ? 'active' : ''} onClick={() => setScreen('meals')}>식단 불러오기·확정</button><button type="button" className={screen === 'conflicts' ? 'active' : ''} onClick={() => setScreen('conflicts')}>알레르기 충돌 탐지</button><button type="button" className={screen === 'substitutions' ? 'active' : ''} onClick={() => setScreen('substitutions')}>대체식 관리</button><button type="button" className={screen === 'documents' ? 'active' : ''} onClick={() => setScreen('documents')}>문서 생성</button><button type="button" className={screen === 'relay' ? 'active' : ''} onClick={() => setScreen('relay')}>Relay 연결</button></div>
+        <div><button type="button" className={screen === 'students' ? 'active' : ''} onClick={() => setScreen('students')}>학생 알레르기 등록</button><button type="button" className={screen === 'meals' ? 'active' : ''} onClick={() => setScreen('meals')}>식단 불러오기·확정</button><button type="button" className={screen === 'conflicts' ? 'active' : ''} onClick={() => setScreen('conflicts')}>알레르기 충돌 탐지</button><button type="button" className={screen === 'substitutions' ? 'active' : ''} onClick={() => setScreen('substitutions')}>대체식 관리</button><button type="button" className={screen === 'documents' ? 'active' : ''} onClick={() => setScreen('documents')}>문서 생성</button><button type="button" className={screen === 'sending' ? 'active' : ''} onClick={() => setScreen('sending')}>학부모 발송(Mock)</button><button type="button" className={screen === 'relay' ? 'active' : ''} onClick={() => setScreen('relay')}>Relay 연결</button></div>
       </nav>
-      {screen === 'students' ? <StudentAllergyPage /> : screen === 'meals' ? <MealPlanPage /> : screen === 'conflicts' ? <ConflictDetectionPage /> : screen === 'substitutions' ? <SubstitutionPage /> : screen === 'documents' ? <DocumentPage /> : <RelayConnectionPage />}
+      {screen === 'students' ? <StudentAllergyPage /> : screen === 'meals' ? <MealPlanPage /> : screen === 'conflicts' ? <ConflictDetectionPage /> : screen === 'substitutions' ? <SubstitutionPage /> : screen === 'documents' ? <DocumentPage /> : screen === 'sending' ? <MockSendPage /> : <RelayConnectionPage />}
     </>
   )
 }

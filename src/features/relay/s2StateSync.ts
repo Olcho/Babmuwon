@@ -1,5 +1,5 @@
 import { DocumentRepository, VersionRepository, db, type BabmuwonDatabase, type GeneratedDoc } from '../../data'
-import { DocumentService, isS2SendEligible } from '../documents/documentService'
+import { DocumentService, S2_STALE_REASON, isS2SendEligible } from '../documents/documentService'
 import { RelayApiError, relayClient, type RelayS2StateRequest, type RelayS2StateResponse } from './relayClient'
 
 /**
@@ -67,19 +67,17 @@ export class S2StateSyncService {
     return outcomes
   }
 
-  /** 발송 직전 확인. 로컬 데이터 기준 최신 승인본이고 Relay 동기화가 끝난 문서만 통과한다. */
+  /**
+   * 실제(Relay 경유) 발송 직전 확인: 로컬 검증(DocumentService.checkS2LocalEligibility)에 더해 Relay 동기화까지 끝난 문서만 통과한다.
+   * Mock 시연은 Relay 동기화가 필요 없으므로 로컬 검증만 쓴다(features/sending).
+   */
   async checkSendEligibility(docId: string): Promise<S2SendEligibility> {
-    const doc = await this.documents.get(docId)
-    if (!doc || doc.docType !== 'S2') return { eligible: false, reason: 'S2 문서를 찾을 수 없습니다.' }
-    if (doc.status === 'stale') return { eligible: false, reason: doc.staleReason ?? '재검토가 필요한 문서입니다.' }
-    if (doc.status !== 'approved') return { eligible: false, reason: '승인된 S2만 발송할 수 있습니다.' }
-    const latest = await this.latestForMonth(doc.yearMonth)
-    if (latest && latest.docVersion > doc.docVersion) return { eligible: false, reason: '더 최신 S2 버전이 있습니다.' }
-    if (!await this.documentService.isCurrent(doc)) {
-      await this.documentService.invalidate(doc.id, STALE_REASON)
-      return { eligible: false, reason: `${STALE_REASON} Relay 재동기화가 필요합니다.` }
+    const local = await this.documentService.checkS2LocalEligibility(docId)
+    if (!local.eligible || !local.doc) {
+      const invalidated = local.doc?.status === 'stale' && local.reason === S2_STALE_REASON
+      return { eligible: false, reason: invalidated ? `${local.reason} Relay 재동기화가 필요합니다.` : local.reason }
     }
-    if (!isS2SendEligible(doc)) return { eligible: false, reason: deliveryStateReason(doc.s2DeliveryState) }
+    if (!isS2SendEligible(local.doc)) return { eligible: false, reason: deliveryStateReason(local.doc.s2DeliveryState) }
     return { eligible: true }
   }
 
@@ -150,7 +148,7 @@ export class S2StateSyncService {
   }
 }
 
-const STALE_REASON = '기준 데이터가 변경되어 재검토가 필요합니다.'
+const STALE_REASON = S2_STALE_REASON
 
 function deliveryStateReason(state: GeneratedDoc['s2DeliveryState']): string {
   if (state === 'sync_failed') return 'Relay 동기화에 실패했습니다. 재동기화 후 발송할 수 있습니다.'

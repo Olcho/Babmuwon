@@ -7,6 +7,8 @@ import type { LocalDocumentArtifact, SupportedDocumentType } from './documentMod
 
 export class DocumentGenerationError extends Error {}
 
+export const S2_STALE_REASON = '기준 데이터가 변경되어 재검토가 필요합니다.'
+
 export class DocumentService {
   private readonly database: BabmuwonDatabase
   private readonly documents: DocumentRepository
@@ -130,6 +132,34 @@ export class DocumentService {
     }
     await this.documents.save(doc)
     return doc
+  }
+
+  /**
+   * S2 발송 전 로컬 검증 (R-32, 9-1). Mock 시연과 실제 발송이 모두 이 검사를 거친다.
+   * - 승인본(approved)이며 stale이 아니어야 한다.
+   * - 같은 월에 더 높은 docVersion의 S2가 없어야 한다(최신 승인본만).
+   * - 문구 칸(이달의 소식·영양 정보)이 모두 승인돼 있어야 한다.
+   * - 해당 월 식단이 확정 상태이고, 지금 데이터로 다시 만든 S2와 내용이 같아야 한다.
+   *   내용이 달라졌으면 그 문서만 stale로 바꾼다(다른 월·다른 종류 문서는 건드리지 않는다).
+   * S2는 식단·학교 정보만 담으므로 학생·대체식 변경은 S2 승인을 무효화하지 않는다(R-30: S1·S2는 planVersion 기준).
+   * Relay 동기화(s2DeliveryState)는 여기서 보지 않는다. 실제 발송 경로에서만 추가로 확인한다.
+   */
+  async checkS2LocalEligibility(id: string): Promise<{ eligible: boolean; reason?: string; doc?: GeneratedDoc }> {
+    const doc = await this.documents.get(id)
+    if (!doc || doc.docType !== 'S2' || !doc.content) return { eligible: false, reason: 'S2 문서를 찾을 수 없습니다.' }
+    if (doc.status === 'stale') return { eligible: false, reason: doc.staleReason ?? '재검토가 필요한 문서입니다.', doc }
+    if (doc.status !== 'approved') return { eligible: false, reason: '승인된 S2만 발송할 수 있습니다.', doc }
+    const artifact = doc.content as LocalDocumentArtifact
+    if (artifact.type !== 'S2' || artifact.narrativeSlots.some((slot) => slot.state !== 'approved')) {
+      return { eligible: false, reason: '검토·승인되지 않은 문구가 있는 S2는 발송할 수 없습니다.', doc }
+    }
+    const sameMonth = await this.documents.getByTypeAndMonth('S2', doc.yearMonth)
+    if (sameMonth.some((item) => item.docVersion > doc.docVersion)) return { eligible: false, reason: '더 최신 S2 버전이 있습니다.', doc }
+    if (!await this.isCurrent(doc)) {
+      const stale = await this.markStale(doc, S2_STALE_REASON)
+      return { eligible: false, reason: S2_STALE_REASON, doc: stale }
+    }
+    return { eligible: true, doc }
   }
 
   /** 저장된 문서가 현재 로컬 데이터(확정 식단·학교 정보 등)로 다시 만든 결과와 같은지 확인한다. */
