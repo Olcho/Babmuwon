@@ -1,4 +1,4 @@
-import { db, StudentRepository, type AllergenNo, type BabmuwonDatabase, type Student } from '../../data'
+import { ConflictRepository, db, StudentRepository, type AllergenNo, type BabmuwonDatabase, type Student } from '../../data'
 import { ALLERGEN_ITEMS } from './allergens'
 
 const ALIAS_WORDS = ['구름', '물결', '별빛', '노을', '하늘', '바람', '여울', '새벽', '윤슬', '마루', '나래', '한결', '다온', '푸름', '해솔', '단비'] as const
@@ -25,6 +25,7 @@ export class StudentService {
   private readonly aliasWords: readonly string[]
   private readonly randomIndex: (max: number) => number
   private readonly repository: StudentRepository
+  private readonly conflicts: ConflictRepository
 
   constructor(
     database: BabmuwonDatabase,
@@ -35,6 +36,7 @@ export class StudentService {
     this.aliasWords = aliasWords
     this.randomIndex = randomIndex
     this.repository = new StudentRepository(database)
+    this.conflicts = new ConflictRepository(database)
   }
 
   async getAll(): Promise<StudentRecord[]> {
@@ -63,6 +65,7 @@ export class StudentService {
       updatedAt: now,
     }
     await this.repository.save(student, input.allergenNos)
+    await this.conflicts.refreshConfirmedPlans()
     return { student, allergenNos: [...input.allergenNos].sort((a, b) => a - b) }
   }
 
@@ -82,6 +85,7 @@ export class StudentService {
       updatedAt: new Date().toISOString(),
     }
     await this.repository.save(student, input.allergenNos)
+    await this.conflicts.refreshConfirmedPlans()
     return { student, allergenNos: [...input.allergenNos].sort((a, b) => a - b) }
   }
 
@@ -91,12 +95,14 @@ export class StudentService {
     const allergenNos = (await this.repository.getAllergies(id)).map((item) => item.allergenNo)
     const updated = { ...student, alias: await this.generateAlias(student.realName), updatedAt: new Date().toISOString() }
     await this.repository.save(updated, allergenNos)
+    await this.conflicts.refreshConfirmedPlans()
     return { student: updated, allergenNos: allergenNos.sort((a, b) => a - b) }
   }
 
   async delete(id: string): Promise<void> {
     if (!await this.repository.get(id)) throw new StudentValidationError('학생 정보를 찾을 수 없습니다.')
     await this.repository.delete(id)
+    await this.conflicts.refreshConfirmedPlans()
   }
 
   private validate(input: StudentInput): void {

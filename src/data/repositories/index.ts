@@ -1,4 +1,5 @@
 export { DocumentRepository } from './documentRepository'
+export { ConflictRepository } from './conflictRepository'
 export { MealRepository } from './mealRepository'
 export { SchoolRepository } from './schoolRepository'
 export { StudentRepository } from './studentRepository'
