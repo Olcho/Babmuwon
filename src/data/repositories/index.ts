@@ -1,0 +1,6 @@
+export { DocumentRepository } from './documentRepository'
+export { MealRepository } from './mealRepository'
+export { SchoolRepository } from './schoolRepository'
+export { StudentRepository } from './studentRepository'
+export { SubstitutionRepository } from './substitutionRepository'
+export { VersionRepository, type VersionKey } from './versionRepository'
