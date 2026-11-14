@@ -5,7 +5,7 @@ export function renderS4PrintableHtml(document: S4Document): string {
 }
 
 export function renderS2NarrativeState(document: S2Document): string {
-  return document.narrativeSlots.map((slot) => `${slot.label}: ${slot.state === 'not_generated' ? 'AI 문구 미생성' : slot.text}`).join('\n')
+  return document.narrativeSlots.map((slot) => `${slot.label}: ${slot.state === 'not_generated' ? '문구 미작성' : slot.text}`).join('\n')
 }
 
 function escapeHtml(value: string): string {

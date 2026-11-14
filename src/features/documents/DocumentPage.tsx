@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { GeneratedDoc, YearMonth } from '../../data'
+import { S2NarrativeEditor } from './S2NarrativeEditor'
 import { s2StateSync, type S2SendEligibility } from '../relay/s2StateSync'
 import { documentService, downloadDocumentXlsx, downloadS4Pdf, downloadS4Zip, type LocalDocumentArtifact, type S2Document, type S4Document, type SupportedDocumentType } from '.'
 
@@ -113,6 +114,7 @@ export function DocumentPage() {
           <div className="document-actions no-print"><span className={`doc-status ${selected.status}`}>{statusLabel(selected.status)}</span>{!['S2', 'S4'].includes(selected.docType) && <button onClick={download}>XLSX 다운로드</button>}{selected.docType === 'S4' && <button disabled={busy} onClick={() => void downloadIndividualPdf()}>학생별 PDF</button>}<button onClick={() => window.print()}>PDF 저장·인쇄</button><button className="primary" disabled={selected.status !== 'draft'} onClick={() => void approve()}>승인</button>{selected.docType === 'S2' && <button disabled={busy || selected.status === 'draft'} onClick={() => void resyncS2()}>Relay 재동기화</button>}</div>
           {selected.docType === 'S2' && eligibility?.docId === selected.id && <p className={eligibility?.eligible ? 'notice' : 'warning'} role="status">Relay 동기화: {deliveryLabel(selected.s2DeliveryState)} · {eligibility?.eligible ? '발송 가능 상태' : `발송 불가${eligibility?.reason ? ` — ${eligibility.reason}` : ''}`}</p>}
           {selected.status === 'stale' && <p className="warning">재검토 필요: {selected.staleReason}</p>}
+          {selected.docType === 'S2' && <S2NarrativeEditor doc={selected} onChanged={() => refresh(selected.id)} />}
           <DocumentPreview artifact={selected.content as LocalDocumentArtifact} version={selected.docVersion} />
         </>}
       </section>
@@ -136,7 +138,7 @@ function MealTable({ rows, slots }: { rows: S2Document['mealTable']['rows']; slo
 }
 
 function S2Preview({ artifact }: { artifact: S2Document }) {
-  return <><section><p>{artifact.school.motto}</p><p>{artifact.school.name} · {artifact.school.address} · {artifact.school.phone} · {artifact.school.homepage}</p><p>{artifact.greeting}</p><MealTable rows={artifact.mealTable.rows} slots={artifact.mealTable.slots} /><p>{artifact.allergenNotice}</p><ol>{artifact.mealTable.legend.map((item) => <li key={item.no}>{item.no}. {item.name}</li>)}</ol><p>{artifact.contact}</p></section><section className="document-page-break"><h2>이달의 소식</h2>{artifact.narrativeSlots.map((slot) => <div className="narrative-missing" key={slot.key}><h3>{slot.label}</h3><p>{slot.state === 'not_generated' ? 'AI 문구 미생성 — 현재 단계에서는 외부 AI를 호출하지 않습니다.' : slot.text}</p></div>)}</section></>
+  return <><section><p>{artifact.school.motto}</p><p>{artifact.school.name} · {artifact.school.address} · {artifact.school.phone} · {artifact.school.homepage}</p><p>{artifact.greeting}</p><MealTable rows={artifact.mealTable.rows} slots={artifact.mealTable.slots} /><p>{artifact.allergenNotice}</p><ol>{artifact.mealTable.legend.map((item) => <li key={item.no}>{item.no}. {item.name}</li>)}</ol><p>{artifact.contact}</p></section><section className="document-page-break"><h2>이달의 소식</h2>{artifact.narrativeSlots.map((slot) => <div className="narrative-missing" key={slot.key}><h3>{slot.label}</h3><p>{slot.state === 'not_generated' ? '문구 미작성 — 아래 편집 영역에서 AI 생성·기본 문구·직접 입력 중 하나로 작성한 뒤 승인해 주세요.' : slot.text}</p>{slot.state !== 'not_generated' && <p className="narrative-meta">{slot.state === 'approved' ? '승인된 문구' : '검토 중인 초안(승인 전)'}{slot.simulated ? ' · 모의 결과' : ''}{slot.sourceMissing ? ' · 출처 없음' : ''}</p>}{slot.citations.length > 0 && <ul>{slot.citations.map((citation) => <li key={citation.url}>{citation.title || citation.url}</li>)}</ul>}</div>)}</section></>
 }
 
 function S4Preview({ artifact }: { artifact: S4Document }) {

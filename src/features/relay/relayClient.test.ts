@@ -114,6 +114,72 @@ describe('RelayClient POST /local/s2-state', () => {
   })
 })
 
+const aiBody = { text: '[모의 초안] 이달의 소식', citations: [], simulated: true, cached: false, reviewRequired: true, sourceMissing: true, source: 'mock' }
+
+describe('RelayClient POST /ai/*', () => {
+  const connect = (fetcher: typeof fetch, timeoutMs?: number) => {
+    const client = new RelayClient({ fetcher, timeoutMs })
+    client.configure('http://127.0.0.1:3000', 'local-secret')
+    return client
+  }
+
+  it('s2-news는 월과 메뉴명만, nutrition은 주제 ID만 JSON으로 보낸다', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse(aiBody))
+    const client = connect(fetcher)
+    await expect(client.s2News({ month: '2026-12', menus: ['닭갈비', '미역국'], studentName: '민감' } as never)).resolves.toMatchObject({ simulated: true, sourceMissing: true, source: 'mock' })
+    await client.nutrition({ topicId: 'balanced_meals' })
+    expect(fetcher.mock.calls[0]![0]).toBe('http://127.0.0.1:3000/ai/s2-news')
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({ month: '2026-12', menus: ['닭갈비', '미역국'] })
+    expect(fetcher.mock.calls[1]![0]).toBe('http://127.0.0.1:3000/ai/nutrition')
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({ topicId: 'balanced_meals' })
+    expect(new Headers(fetcher.mock.calls[1]![1]?.headers).get('Authorization')).toBe('Bearer local-secret')
+  })
+
+  it('잘못된 요청은 전송 전에 거부하고 토큰이 없으면 요청하지 않는다', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+    const client = connect(fetcher)
+    for (const bad of [
+      { month: '2026-13', menus: ['a'] }, { month: '2026-12', menus: [] }, { month: '2026-12', menus: ['a', 'b', 'c', 'd'] },
+      { month: '2026-12', menus: ['  '] }, { month: '2026-12', menus: ['가'.repeat(201)] },
+    ]) await expect(client.s2News(bad)).rejects.toMatchObject({ kind: 'validation' })
+    await expect(client.nutrition({ topicId: 'free_text' as never })).rejects.toMatchObject({ kind: 'validation' })
+    expect(fetcher).not.toHaveBeenCalled()
+    await expect(new RelayClient({ fetcher }).nutrition({ topicId: 'food_waste' })).rejects.toMatchObject({ kind: 'configuration' })
+  })
+
+  it.each([
+    [400, 'BLOCKED_BY_PRIVACY_POLICY', 'validation'], [401, 'UNAUTHORIZED', 'authentication'], [403, 'ORIGIN_NOT_ALLOWED', 'forbidden'],
+    [409, 'S2_NOT_CURRENT_APPROVED', 'conflict'], [429, 'RELAY_BUSY', 'rate_limited'], [504, 'LINER_TIMEOUT', 'server'],
+  ])('HTTP %i(%s)를 %s로 분류한다', async (status, code, kind) => {
+    const client = connect(vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ error: code }, status)))
+    await expect(client.s2News({ month: '2026-12', menus: ['닭갈비'] })).rejects.toMatchObject({ kind, status, code })
+  })
+
+  it('AI 호출은 일반 요청보다 긴 대기 시간을 쓰고, 네트워크 오류·잘못된 응답을 구분한다', async () => {
+    const slow: typeof fetch = (_url, init) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(jsonResponse(aiBody)), 60)
+      init?.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) })
+    })
+    const client = connect(slow, 10)
+    await expect(client.s2News({ month: '2026-12', menus: ['닭갈비'] })).resolves.toMatchObject({ text: aiBody.text })
+    await expect(client.health()).rejects.toMatchObject({ kind: 'timeout' })
+
+    const offline = connect(vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(offline.nutrition({ topicId: 'food_waste' })).rejects.toMatchObject({ kind: 'network_or_cors' })
+    for (const bad of [{ ...aiBody, text: '' }, { ...aiBody, simulated: 'yes' }, { ...aiBody, source: 'other' },
+      { ...aiBody, citations: [{ title: 'x', url: 'javascript:alert(1)' }] }, { text: 'only text' }]) {
+      const invalid = connect(vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse(bad)))
+      await expect(invalid.nutrition({ topicId: 'food_waste' })).rejects.toMatchObject({ kind: 'invalid_response' })
+    }
+  })
+
+  it('http(s) 출처가 있는 응답을 그대로 전달한다', async () => {
+    const body = { ...aiBody, simulated: false, sourceMissing: false, source: 'search', citations: [{ title: '식약처', url: 'https://example.invalid/a' }] }
+    const client = connect(vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse(body)))
+    await expect(client.nutrition({ topicId: 'food_allergy_basics' })).resolves.toMatchObject({ citations: body.citations, source: 'search' })
+  })
+})
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }

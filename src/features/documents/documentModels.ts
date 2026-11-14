@@ -25,9 +25,11 @@ export interface NarrativeSlot {
   key: 'monthlyNews' | 'nutritionEducation'
   label: string
   state: 'not_generated' | 'draft' | 'approved'
-  source: 'router' | 'liner' | 'manual'
+  source: 'router' | 'liner' | 'manual' | 'template'
   text: string
   citations: { title: string; url: string }[]
+  simulated?: boolean
+  sourceMissing?: boolean
 }
 
 export interface S2Document extends DocumentHeader {

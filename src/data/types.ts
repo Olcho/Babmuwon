@@ -145,6 +145,15 @@ export interface ReviewChecklist {
   factsChecked: boolean
 }
 
+/** Relay AI 응답에서 가져온 상태. 검토 화면에 그대로 표시하며 자동 승인에는 쓰지 않는다. */
+export interface AiDraftMeta {
+  simulated: boolean
+  sourceMissing: boolean
+  reviewRequired: boolean
+  cached: boolean
+  upstream: 'mock' | 'router' | 'search'
+}
+
 export interface TextDraft {
   id: EntityId
   generatedDocId?: EntityId
@@ -156,6 +165,7 @@ export interface TextDraft {
   edited: boolean
   reviewChecklist: ReviewChecklist
   approved: boolean
+  meta?: AiDraftMeta
 }
 
 export type DocumentType = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'

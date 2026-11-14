@@ -27,6 +27,30 @@ export interface RelayS2StateResponse extends RelayS2StateRequest {
   approvalSource: 'local-client-attestation'
 }
 
+export const RELAY_NUTRITION_TOPICS = ['balanced_meals', 'seasonal_foods', 'food_allergy_basics', 'winter_nutrition', 'food_waste'] as const
+export type RelayNutritionTopicId = (typeof RELAY_NUTRITION_TOPICS)[number]
+
+/** `POST /ai/s2-news`. menus는 공개 식단 메뉴명 1~3개뿐이다. */
+export interface RelayS2NewsRequest { month: string; menus: string[] }
+/** `POST /ai/nutrition`. 미리 정한 주제 ID만 허용된다. */
+export interface RelayNutritionRequest { topicId: RelayNutritionTopicId }
+export interface RelayCitation { title: string; url: string }
+
+export interface RelayAiResponse {
+  text: string
+  citations: RelayCitation[]
+  simulated: boolean
+  cached: boolean
+  reviewRequired: boolean
+  sourceMissing: boolean
+  source: 'mock' | 'router' | 'search'
+}
+
+/** Router 30초, Search Agent 60초 제한보다 여유 있게 기다린다. */
+export const RELAY_ROUTER_TIMEOUT_MS = 40_000
+export const RELAY_SEARCH_TIMEOUT_MS = 70_000
+const MAX_MENU_CODE_POINTS = 200
+
 export type RelayErrorKind =
   | 'configuration' // 토큰·주소 미설정 또는 요청 전 로컬 검증 실패
   | 'authentication' // 401
@@ -108,18 +132,39 @@ export class RelayClient {
     return value
   }
 
+  async s2News(input: RelayS2NewsRequest): Promise<RelayAiResponse> {
+    const menus = input.menus
+    const invalid = !MONTH_PATTERN.test(input.month) || !Array.isArray(menus) || menus.length < 1 || menus.length > 3
+      || menus.some((menu) => typeof menu !== 'string' || !menu.trim() || [...menu].length > MAX_MENU_CODE_POINTS)
+    if (invalid) throw new RelayApiError('validation', 'S2 소식 요청은 월(YYYY-MM)과 메뉴명 1~3개(각 200자 이하)만 보낼 수 있습니다.')
+    return this.ai('/ai/s2-news', { month: input.month, menus: [...menus] }, RELAY_ROUTER_TIMEOUT_MS)
+  }
+
+  async nutrition(input: RelayNutritionRequest): Promise<RelayAiResponse> {
+    if (!(RELAY_NUTRITION_TOPICS as readonly string[]).includes(input.topicId)) {
+      throw new RelayApiError('validation', '허용된 영양 교육 주제만 요청할 수 있습니다.')
+    }
+    return this.ai('/ai/nutrition', { topicId: input.topicId }, RELAY_SEARCH_TIMEOUT_MS)
+  }
+
+  private async ai(path: string, body: unknown, timeoutMs: number): Promise<RelayAiResponse> {
+    const value = await this.post(path, body, timeoutMs)
+    if (!isAiResponse(value)) throw new RelayApiError('invalid_response', 'Relay AI 응답 형식이 올바르지 않습니다.')
+    return value
+  }
+
   /** 인증이 필요한 JSON POST. 자동 재시도는 하지 않는다. */
-  private async post(path: string, body: unknown): Promise<unknown> {
+  private async post(path: string, body: unknown, timeoutMs?: number): Promise<unknown> {
     if (!this.token) throw new RelayApiError('configuration', 'Relay 토큰을 입력해 주세요.')
-    return this.request(path, true, { method: 'POST', body })
+    return this.request(path, true, { method: 'POST', body, timeoutMs })
   }
 
   private async request(
-    path: string, authenticated: boolean, options: { method?: 'GET' | 'POST'; body?: unknown } = {},
+    path: string, authenticated: boolean, options: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number } = {},
   ): Promise<unknown> {
     const method = options.method ?? 'GET'
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.timeoutMs)
     try {
       const headers = new Headers({ Accept: 'application/json' })
       if (authenticated) headers.set('Authorization', `Bearer ${this.token}`)
@@ -208,6 +253,23 @@ function isS2StateResponse(value: unknown): value is RelayS2StateResponse {
   return typeof item.month === 'string' && typeof item.planConfirmed === 'boolean' && typeof item.approved === 'boolean'
     && ['planVersion', 'docVersion', 'basedOnPlanVersion'].every((key) => Number.isSafeInteger(item[key]))
     && item.approvalSource === 'local-client-attestation'
+}
+
+function isAiResponse(value: unknown): value is RelayAiResponse {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return typeof item.text === 'string' && item.text.trim().length > 0 && item.text.length <= 20_000
+    && ['simulated', 'cached', 'reviewRequired', 'sourceMissing'].every((key) => typeof item[key] === 'boolean')
+    && ['mock', 'router', 'search'].includes(String(item.source))
+    && Array.isArray(item.citations) && item.citations.length <= 20 && item.citations.every(isCitation)
+}
+
+/** 출처 링크는 http(s)만 허용한다. 텍스트는 React 텍스트로만 렌더링한다. */
+function isCitation(value: unknown): value is RelayCitation {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  if (typeof item.title !== 'string' || typeof item.url !== 'string') return false
+  try { return ['http:', 'https:'].includes(new URL(item.url).protocol) } catch { return false }
 }
 
 function getErrorCode(value: unknown): string | undefined {
