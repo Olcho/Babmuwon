@@ -57,6 +57,13 @@ export class ConflictRepository {
       if (exact) {
         unused.delete(exact.id)
         conflictsToSave.push({ ...next, id: exact.id, active: true })
+        const substitution = substitutionByConflict.get(exact.id)
+        const student = studentById.get(next.studentId)
+        if (substitution && student?.needsSubstitute === false && substitution.status !== 'excludeOnly') {
+          substitutionsToSave.push({ ...substitution, status: 'excludeOnly', checkedProcessed: false, checkedAt: undefined, updatedAt: at })
+        } else if (substitution && student?.needsSubstitute !== false && substitution.status === 'excludeOnly') {
+          substitutionsToSave.push({ ...substitution, status: 'pending', updatedAt: at })
+        }
         continue
       }
       const changed = existing.find((old) => unused.has(old.id) && isSameConflictPosition(old, next))

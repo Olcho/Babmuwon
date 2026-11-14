@@ -104,6 +104,9 @@ export interface Substitution {
   id: EntityId
   conflictId: EntityId
   substituteName?: string
+  substituteAllergenStatus?: Exclude<AllergenStatus, 'unknown'>
+  substituteAllergenNos?: AllergenNo[]
+  selectionSource?: 'recommended' | 'manual'
   checkedProcessed: boolean
   checkedAt?: ISODateTime
   status: 'pending' | 'confirmed' | 'excludeOnly' | 'needs_review' | 'obsolete'

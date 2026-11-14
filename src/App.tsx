@@ -3,6 +3,7 @@ import type { MealEntry, MealPlan } from './data'
 import { mealPlanService, parseAllergenValue, parseMealWorkbook, type MealPlanParseIssue, type StoredMealPlan } from './features/meal-plan'
 import { StudentAllergyPage } from './features/students/StudentAllergyPage'
 import { ConflictDetectionPage } from './features/conflicts/ConflictDetectionPage'
+import { SubstitutionPage } from './features/substitutions/SubstitutionPage'
 import './App.css'
 
 function allergenLabel(entry: MealEntry): string {
@@ -164,14 +165,14 @@ function MealPlanPage() {
 }
 
 function App() {
-  const [screen, setScreen] = useState<'students' | 'meals' | 'conflicts'>('students')
+  const [screen, setScreen] = useState<'students' | 'meals' | 'conflicts' | 'substitutions'>('students')
   return (
     <>
       <nav className="screen-nav" aria-label="업무 화면">
         <strong>밥무원</strong>
-        <div><button type="button" className={screen === 'students' ? 'active' : ''} onClick={() => setScreen('students')}>학생 알레르기 등록</button><button type="button" className={screen === 'meals' ? 'active' : ''} onClick={() => setScreen('meals')}>식단 불러오기·확정</button><button type="button" className={screen === 'conflicts' ? 'active' : ''} onClick={() => setScreen('conflicts')}>알레르기 충돌 탐지</button></div>
+        <div><button type="button" className={screen === 'students' ? 'active' : ''} onClick={() => setScreen('students')}>학생 알레르기 등록</button><button type="button" className={screen === 'meals' ? 'active' : ''} onClick={() => setScreen('meals')}>식단 불러오기·확정</button><button type="button" className={screen === 'conflicts' ? 'active' : ''} onClick={() => setScreen('conflicts')}>알레르기 충돌 탐지</button><button type="button" className={screen === 'substitutions' ? 'active' : ''} onClick={() => setScreen('substitutions')}>대체식 관리</button></div>
       </nav>
-      {screen === 'students' ? <StudentAllergyPage /> : screen === 'meals' ? <MealPlanPage /> : <ConflictDetectionPage />}
+      {screen === 'students' ? <StudentAllergyPage /> : screen === 'meals' ? <MealPlanPage /> : screen === 'conflicts' ? <ConflictDetectionPage /> : <SubstitutionPage />}
     </>
   )
 }
