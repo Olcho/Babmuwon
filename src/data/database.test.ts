@@ -37,15 +37,16 @@ describe('IndexedDB 저장 계층', () => {
     expect((await new SchoolRepository(database).get())?.name).toBe('새로고침가상학교')
   })
 
-  it('식단 확정과 메뉴 수정 시 planVersion을 증가시킨다', async () => {
+  it('식단 확정 시 planVersion을 증가시키고 작성 중 수정은 버전을 올리지 않는다', async () => {
     const meals = new MealRepository(database)
     const now = new Date().toISOString()
     const plan: MealPlan = { id: 'plan-1', yearMonth: '2026-12', status: 'draft', sourceFile: 'sample.xlsx', unknownCount: 0, createdAt: now, updatedAt: now }
     const entry: MealEntry = { id: 'entry-1', mealPlanId: plan.id, date: '2026-12-01', slot: '주찬', menuName: '가상메뉴', allergenStatus: 'none_confirmed', allergenNos: [], statusSource: 'manual', statusSetAt: now }
     await meals.saveDraft(plan, [entry])
+    await meals.updateDraftEntry({ ...entry, menuName: '수정된가상메뉴' })
+    expect((await new VersionRepository(database).get()).planVersion).toBe(0)
     await meals.confirm(plan.id, now)
-    await meals.updateEntry({ ...entry, menuName: '수정된가상메뉴' })
-    expect((await new VersionRepository(database).get()).planVersion).toBe(2)
+    expect((await new VersionRepository(database).get()).planVersion).toBe(1)
   })
 
   it('학생과 알레르기를 원자적으로 저장하고 studentVersion을 증가시킨다', async () => {
