@@ -67,7 +67,8 @@ export class SubstitutionRepository {
   private async markDocumentsStale(yearMonth: string, substitutionVersion: number, updatedAt: string): Promise<void> {
     const documents = await this.db.generatedDocs.where('status').anyOf('approved', 'sent').toArray()
     const affected = documents.filter((document) =>
-      document.yearMonth === yearMonth && ['S3', 'S4', 'S5'].includes(document.docType)
+      ((document.yearMonth === yearMonth && ['S3', 'S4'].includes(document.docType))
+        || (document.docType === 'S5' && document.yearMonth === yearMonth.slice(0, 4)))
       && document.basedOn.substitutionVersion !== substitutionVersion,
     )
     await this.db.generatedDocs.bulkPut(affected.map((document) => ({

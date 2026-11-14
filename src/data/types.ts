@@ -1,5 +1,6 @@
 export type EntityId = string
 export type YearMonth = `${number}-${number}`
+export type DocumentPeriod = YearMonth | `${number}`
 export type ISODate = string
 export type ISODateTime = string
 export type AllergenNo = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19
@@ -159,7 +160,7 @@ export type DocumentType = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
 export interface GeneratedDoc {
   id: EntityId
   docType: DocumentType
-  yearMonth: YearMonth
+  yearMonth: DocumentPeriod
   docVersion: number
   basedOn: Pick<DataVersion, 'planVersion' | 'studentVersion' | 'substitutionVersion'>
   status: 'draft' | 'approved' | 'stale' | 'sent'
@@ -168,6 +169,9 @@ export interface GeneratedDoc {
   correctionNeeded: boolean
   createdAt: ISODateTime
   updatedAt: ISODateTime
+  generatedAt?: ISODateTime
+  sourceFingerprint?: string
+  content?: unknown
 }
 
 export interface SendBatch {

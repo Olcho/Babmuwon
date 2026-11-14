@@ -1,5 +1,5 @@
 import type { BabmuwonDatabase } from '../database'
-import type { DocumentType, EntityId, GeneratedDoc, TextDraft, YearMonth } from '../types'
+import type { DocumentPeriod, DocumentType, EntityId, GeneratedDoc, TextDraft } from '../types'
 
 export class DocumentRepository {
   private readonly db: BabmuwonDatabase
@@ -7,26 +7,20 @@ export class DocumentRepository {
   constructor(db: BabmuwonDatabase) { this.db = db }
 
   get(id: EntityId) { return this.db.generatedDocs.get(id) }
-  getByTypeAndMonth(docType: DocumentType, yearMonth: YearMonth) {
+  getByTypeAndMonth(docType: DocumentType, yearMonth: DocumentPeriod) {
     return this.db.generatedDocs.where('[docType+yearMonth]').equals([docType, yearMonth]).toArray()
   }
   save(doc: GeneratedDoc) { return this.db.generatedDocs.put(doc) }
+  getAll() { return this.db.generatedDocs.toArray() }
   delete(id: EntityId) { return this.db.generatedDocs.delete(id) }
   getDrafts(generatedDocId: EntityId) { return this.db.textDrafts.where('generatedDocId').equals(generatedDocId).toArray() }
   saveDraft(draft: TextDraft) { return this.db.textDrafts.put(draft) }
 
-  async markOutdatedDocumentsStale(reason: string): Promise<number> {
-    const current = await this.db.dataVersions.get('current')
-    if (!current) return 0
+  async markDocumentsStale(ids: EntityId[], reason: string): Promise<number> {
+    if (ids.length === 0) return 0
     return this.db.transaction('rw', this.db.generatedDocs, async () => {
-      const approved = await this.db.generatedDocs.where('status').anyOf('approved', 'sent').toArray()
-      const stale = approved.filter((doc) => {
-        if (doc.basedOn.planVersion !== current.planVersion) return true
-        return doc.docType !== 'S1' && doc.docType !== 'S2' && (
-          doc.basedOn.studentVersion !== current.studentVersion ||
-          doc.basedOn.substitutionVersion !== current.substitutionVersion
-        )
-      })
+      const documents = await this.db.generatedDocs.bulkGet(ids)
+      const stale = documents.filter((doc): doc is GeneratedDoc => Boolean(doc && (doc.status === 'approved' || doc.status === 'sent')))
       await this.db.generatedDocs.bulkPut(stale.map((doc) => ({
         ...doc, status: 'stale' as const, approvedAt: undefined, staleReason: reason,
         correctionNeeded: doc.status === 'sent', updatedAt: new Date().toISOString(),

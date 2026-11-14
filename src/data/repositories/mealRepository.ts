@@ -52,7 +52,7 @@ export class MealRepository {
         const activeDocuments = await this.db.generatedDocs
           .where('status')
           .anyOf('approved', 'sent')
-          .filter((doc) => doc.yearMonth === plan.yearMonth)
+          .filter((doc) => doc.yearMonth === plan.yearMonth || (doc.docType === 'S5' && doc.yearMonth === plan.yearMonth.slice(0, 4)))
           .toArray()
         await this.db.generatedDocs.bulkPut(activeDocuments.map((doc) => ({
           ...doc,
