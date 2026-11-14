@@ -88,9 +88,11 @@ export interface Conflict {
   date: ISODate
   studentId: EntityId
   mealEntryId: EntityId
+  slot?: string
   menuName: string
   kind: 'allergen' | 'unknown_menu'
   allergenNos: AllergenNo[]
+  active?: boolean
 }
 
 export interface Substitution {
